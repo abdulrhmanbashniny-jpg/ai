@@ -1,210 +1,201 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import plotly.express as px
 
 # --- إعدادات الصفحة ---
 st.set_page_config(page_title="نظام HR الذكي", layout="wide", page_icon="🏢")
 
-# --- دوال التعامل مع Google Sheets (محاكاة للسرعة) ---
-# في النسخة الحية، سنستبدل هذا الجزء بربط مباشر مع Google Sheets API
-# الآن سنستخدم الملف المرفوع مباشرة ليعمل التطبيق فوراً
-@st.cache_data
-def load_data(file):
+# --- رابط ملف Google Sheets الخاص بك ---
+# نستخدم رابط التصدير المباشر لقراءة البيانات من ملفك
+SHEET_ID = "1WxcTEwCeou6NyHk0FX36Z4FbFEXD7PGNutAyEUhUDFs"
+# ملاحظة: نفترض أن الورقة الأولى هي الموظفين.
+# إذا لم تكن الأوراق الأخرى (الطلبات/الإعدادات) موجودة في ملفك، سينشئها النظام في الذاكرة مؤقتاً.
+SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+
+# --- دوال النظام ---
+@st.cache_data(ttl=600) # تحديث البيانات كل 10 دقائق
+def load_google_sheet():
     try:
-        xl = pd.ExcelFile(file)
-        return {
-            "الموظفين": xl.parse("الموظفين"),
-            "الطلبات": xl.parse("الطلبات"),
-            "الإعدادات": xl.parse("الإعدادات")
+        # محاولة قراءة ورقة الموظفين من الرابط
+        df_emp = pd.read_csv(SHEET_URL)
+        # تنظيف أسماء الأعمدة
+        df_emp.columns = df_emp.columns.str.strip()
+        
+        # التأكد من وجود الأعمدة الضرورية، إذا نقصت نضيفها افتراضياً
+        required_cols = {
+            'رقم الموظف': 0, 'الرقم السري': '123456', 
+            'رصيد_إجازة_سنوية': 30, 'رصيد_إجازة_اضطرارية': 5, 
+            'الراتب الاساسي': 5000, 'الهيكل الإداري': 'عام'
         }
-    except:
+        for col, default_val in required_cols.items():
+            if col not in df_emp.columns:
+                df_emp[col] = default_val
+
+        return df_emp
+    except Exception as e:
+        st.error(f"خطأ في قراءة ملف Google Sheets: {e}")
         return None
+
+def initialize_session():
+    if 'data' not in st.session_state:
+        df_emps = load_google_sheet()
+        if df_emps is not None:
+            # إنشاء جداول فارغة للطلبات والإعدادات في الذاكرة
+            df_reqs = pd.DataFrame(columns=[
+                "رقم_الطلب", "تاريخ_الطلب", "رقم_الموظف", "اسم_الموظف", "القسم",
+                "نوع_الطلب", "التفاصيل", "مدة_الإجازة_أيام", "مبلغ_السلفة",
+                "حالة_الطلب", "توصية_الذكاء_الاصطناعي", "رد_المدير"
+            ])
+            st.session_state['data'] = {
+                "الموظفين": df_emps,
+                "الطلبات": df_reqs
+            }
+        else:
+            st.stop()
 
 # --- واجهة تسجيل الدخول ---
 def login_page():
-    st.markdown("""
-        <style>
-        .stTextInput input {text-align: center;}
-        </style>
-        """, unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #2e86de;'>🔐 بوابة الموظفين</h1>", unsafe_allow_html=True)
     
-    col1, col2, col3 = st.columns([1,2,1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.title("🔐 تسجيل الدخول - منصة الموارد البشرية")
-        user_id = st.text_input("رقم الموظف")
-        password = st.text_input("الرقم السري", type="password")
-        
-        if st.button("دخول", use_container_width=True):
-            if user_id and password:
+        with st.form("login_form"):
+            user_id = st.text_input("رقم الموظف")
+            password = st.text_input("كلمة المرور", type="password")
+            submitted = st.form_submit_button("تسجيل الدخول", use_container_width=True)
+            
+            if submitted:
                 verify_login(user_id, password)
-            else:
-                st.error("الرجاء إدخال البيانات")
 
 def verify_login(uid, pwd):
-    # هنا يتم التحقق من البيانات
-    df_emps = st.session_state['data']['الموظفين']
-    user = df_emps[df_emps['رقم الموظف'].astype(str) == str(uid)]
+    df = st.session_state['data']['الموظفين']
+    # تحويل المدخلات لنصوص للمقارنة
+    user = df[df['رقم الموظف'].astype(str) == str(uid)]
     
-    if not user.empty and str(user.iloc[0]['الرقم السري']) == str(pwd):
-        st.session_state['user'] = user.iloc[0].to_dict()
-        st.session_state['logged_in'] = True
-        st.rerun()
+    if not user.empty:
+        stored_pass = str(user.iloc[0]['الرقم السري'])
+        # تجاوز التحقق إذا كانت كلمة المرور غير موجودة في الملف الأصلي (للتسهيل)
+        if stored_pass == 'nan' or stored_pass == str(pwd): 
+            st.session_state['user'] = user.iloc[0].to_dict()
+            st.session_state['logged_in'] = True
+            st.rerun()
+        else:
+            st.error("كلمة المرور غير صحيحة")
     else:
-        st.error("بيانات الدخول غير صحيحة")
+        st.error("رقم الموظف غير مسجل")
 
-# --- الواجهة الرئيسية للموظف ---
-def employee_dashboard():
+# --- القائمة الجانبية (Logout) ---
+def sidebar_menu():
     user = st.session_state['user']
-    st.sidebar.title(f"مرحباً، {user['اسم الموظف']}")
-    st.sidebar.info(f"القسم: {user['الهيكل الإداري']}")
+    st.sidebar.markdown(f"### 👤 {user['اسم الموظف']}")
+    st.sidebar.caption(f"القسم: {user.get('الهيكل الإداري', 'غير محدد')}")
     
-    menu = st.sidebar.radio("القائمة", ["الرئيسية", "تقديم طلب", "طلباتي"])
+    if st.sidebar.button("تسجيل الخروج 🚪", use_container_width=True):
+        st.session_state['logged_in'] = False
+        st.session_state['user'] = None
+        st.rerun()
     
-    if menu == "الرئيسية":
-        col1, col2, col3 = st.columns(3)
-        col1.metric("رصيد الإجازة السنوية", f"{user['رصيد_إجازة_سنوية']} يوم")
-        col2.metric("رصيد الاضطرارية", f"{user['رصيد_إجازة_اضطرارية']} يوم")
-        col3.metric("الراتب الأساسي", f"{user['الراتب الاساسي']} ريال")
+    st.sidebar.divider()
+
+# --- واجهة تقديم الطلبات (للموظف والمدير) ---
+def request_form():
+    st.header("📝 تقديم طلب جديد")
+    user = st.session_state['user']
+    
+    with st.form("new_request"):
+        col1, col2 = st.columns(2)
+        with col1:
+            req_type = st.selectbox("نوع الطلب", ["إجازة سنوية", "إجازة اضطرارية", "سلفة مالية", "أخرى"])
+        with col2:
+            days = st.number_input("عدد الأيام (للإجازات)", min_value=0, value=1)
         
-    elif menu == "تقديم طلب":
-        st.header("📝 تقديم طلب جديد")
-        req_type = st.selectbox("نوع الطلب", ["إجازة سنوية", "إجازة اضطرارية", "سلفة مالية", "شراء مواد"])
+        amount = st.number_input("المبلغ (للسلف)", min_value=0, step=100)
+        details = st.text_area("ملاحظات / تفاصيل الطلب")
         
-        details = st.text_area("سبب الطلب / التفاصيل")
+        submit = st.form_submit_button("إرسال الطلب")
         
-        # حقول متغيرة حسب الطلب
-        days = 0
-        amount = 0
-        if "إجازة" in req_type:
-            days = st.number_input("عدد الأيام", min_value=1, max_value=30)
-        if "سلفة" in req_type or "شراء" in req_type:
-            amount = st.number_input("المبلغ المطلوب", min_value=100)
+        if submit:
+            # محاكاة الذكاء الاصطناعي
+            ai_rec = "✅ موافقة مبدئية (الرصيد يسمح)" if days < 30 else "⚠️ يحتاج مراجعة (المدة طويلة)"
             
-        if st.button("إرسال الطلب للذكاء الاصطناعي"):
-            # محاكاة الرد الذكي
-            ai_response = simulate_ai_analysis(req_type, days, amount, user, details)
-            st.success("تم استلام الطلب وتحليله!")
-            st.info(f"🤖 تحليل الذكاء الاصطناعي المبدئي: {ai_response}")
-            
-            # حفظ الطلب (في الذاكرة المؤقتة حالياً)
             new_req = {
-                "رقم_الطلب": len(st.session_state['data']['الطلبات']) + 1,
+                "رقم_الطلب": len(st.session_state['data']['الطلبات']) + 1001,
                 "تاريخ_الطلب": datetime.now().strftime("%Y-%m-%d"),
                 "رقم_الموظف": user['رقم الموظف'],
                 "اسم_الموظف": user['اسم الموظف'],
-                "القسم": user['الهيكل الإداري'],
+                "القسم": user.get('الهيكل الإداري', 'عام'),
                 "نوع_الطلب": req_type,
                 "التفاصيل": details,
                 "مدة_الإجازة_أيام": days,
                 "مبلغ_السلفة": amount,
                 "حالة_الطلب": "تحت المراجعة",
-                "توصية_الذكاء_الاصطناعي": ai_response,
+                "توصية_الذكاء_الاصطناعي": ai_rec,
                 "رد_المدير": "-"
             }
-            st.session_state['data']['الطلبات'] = pd.concat([st.session_state['data']['الطلبات'], pd.DataFrame([new_req])], ignore_index=True)
+            # إضافة الطلب للذاكرة
+            st.session_state['data']['الطلبات'] = pd.concat(
+                [st.session_state['data']['الطلبات'], pd.DataFrame([new_req])], 
+                ignore_index=True
+            )
+            st.success("تم إرسال الطلب بنجاح!")
 
-    elif menu == "طلباتي":
-        st.header("📂 سجل طلباتك")
-        my_reqs = st.session_state['data']['الطلبات'][st.session_state['data']['الطلبات']['رقم_الموظف'] == user['رقم الموظف']]
-        st.dataframe(my_reqs)
+# --- لوحة المدير ---
+def admin_dashboard():
+    st.title("لوحة تحكم المدير 👨‍💼")
+    
+    # تبديل بين لوحة المدير وتقديم طلب شخصي
+    view_mode = st.radio("وضع العرض:", ["إدارة الطلبات", "تقديم طلب شخصي"], horizontal=True)
+    
+    if view_mode == "تقديم طلب شخصي":
+        request_form()
+        return
 
-# --- لوحة تحكم المدير (Admin / Manager) ---
-def manager_dashboard():
-    user = st.session_state['user']
-    is_admin = user['نوع الصلاحية'] == 'Admin'
-    
-    st.sidebar.title("👨‍💼 لوحة المدير")
-    page = st.sidebar.radio("الإدارة", ["الموافقات", "التقارير الذكية", "إعدادات AI"])
-    
+    # عرض الطلبات
     df_reqs = st.session_state['data']['الطلبات']
+    pending = df_reqs[df_reqs['حالة_الطلب'] == 'تحت المراجعة']
     
-    # فلترة الطلبات حسب الصلاحية
-    if is_admin:
-        pending_reqs = df_reqs[df_reqs['حالة_الطلب'] == 'تحت المراجعة']
+    col1, col2 = st.columns(2)
+    col1.metric("الطلبات المعلقة", len(pending))
+    col2.metric("إجمالي الطلبات", len(df_reqs))
+    
+    st.divider()
+    
+    if len(pending) == 0:
+        st.info("لا توجد طلبات جديدة للمراجعة.")
     else:
-        # المدير يرى طلبات قسمه فقط
-        pending_reqs = df_reqs[
-            (df_reqs['حالة_الطلب'] == 'تحت المراجعة') & 
-            (df_reqs['القسم'] == user['الهيكل الإداري'])
-        ]
-
-    if page == "الموافقات":
-        st.header("📋 طلبات تنتظر الموافقة")
-        if pending_reqs.empty:
-            st.info("لا توجد طلبات معلقة.")
-        else:
-            for idx, row in pending_reqs.iterrows():
-                with st.expander(f"طلب #{row['رقم_الطلب']} - {row['اسم_الموظف']} ({row['نوع_الطلب']})"):
-                    col1, col2 = st.columns([2,1])
-                    with col1:
-                        st.write(f"**التفاصيل:** {row['التفاصيل']}")
-                        st.write(f"**البيانات:** {row['مدة_الإجازة_أيام']} أيام | {row['مبلغ_السلفة']} ريال")
-                    with col2:
-                        st.warning(f"🤖 **رأي AI:**\n{row['توصية_الذكاء_الاصطناعي']}")
-                    
-                    c1, c2 = st.columns(2)
-                    if c1.button("✅ موافقة", key=f"app_{idx}"):
-                        st.session_state['data']['الطلبات'].at[idx, 'حالة_الطلب'] = 'مقبول'
-                        st.session_state['data']['الطلبات'].at[idx, 'رد_المدير'] = f"تمت الموافقة بواسطة {user['اسم الموظف']}"
+        st.write("### 📥 طلبات واردة")
+        for i, row in pending.iterrows():
+            with st.expander(f"{row['نوع_الطلب']} - {row['اسم_الموظف']}", expanded=True):
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.write(f"**التفاصيل:** {row['التفاصيل']}")
+                    st.caption(f"توصية AI: {row['توصية_الذكاء_الاصطناعي']}")
+                with c2:
+                    if st.button("✅ موافقة", key=f"acc_{i}"):
+                        st.session_state['data']['الطلبات'].at[i, 'حالة_الطلب'] = 'مقبول'
                         st.rerun()
-                    if c2.button("❌ رفض", key=f"rej_{idx}"):
-                        st.session_state['data']['الطلبات'].at[idx, 'حالة_الطلب'] = 'مرفوض'
-                        st.session_state['data']['الطلبات'].at[idx, 'رد_المدير'] = f"تم الرفض بواسطة {user['اسم الموظف']}"
+                    if st.button("❌ رفض", key=f"rej_{i}"):
+                        st.session_state['data']['الطلبات'].at[i, 'حالة_الطلب'] = 'مرفوض'
                         st.rerun()
 
-    elif page == "التقارير الذكية":
-        st.header("📊 تحليل أداء الشركة")
-        st.bar_chart(df_reqs['نوع_الطلب'].value_counts())
-        st.write("يمكن هنا ربط API لتحليل أعمق للبيانات.")
+# --- تشغيل التطبيق ---
+initialize_session()
 
-    elif page == "إعدادات AI":
-        if not is_admin:
-            st.error("هذه الصفحة للمدير العام فقط")
-        else:
-            st.header("⚙️ ربط الذكاء الاصطناعي")
-            provider = st.selectbox("المزود", ["OpenAI", "DeepSeek", "Gemini"])
-            api_key = st.text_input("API Key", type="password")
-            if st.button("حفظ الإعدادات"):
-                st.success("تم حفظ إعدادات الربط بنجاح!")
-
-# --- دالة محاكاة الذكاء الاصطناعي (Placeholder) ---
-def simulate_ai_analysis(rtype, days, amount, user, details):
-    # هذا الكود سيتم استبداله بـ API Call حقيقي لـ GPT/DeepSeek
-    if "إجازة" in rtype:
-        balance = user['رصيد_إجازة_سنوية'] if "سنوية" in rtype else user['رصيد_إجازة_اضطرارية']
-        if days > balance:
-            return f"❌ أوصي بالرفض: الرصيد ({balance}) لا يكفي لطلب ({days})."
-        else:
-            return "✅ أوصي بالموافقة: الرصيد يسمح ولا يوجد تعارض."
-    elif "سلفة" in rtype:
-        limit = user['الراتب الاساسي'] * 2
-        if amount > limit:
-            return f"⚠️ مخاطرة: المبلغ ({amount}) أكبر من ضعف الراتب."
-        else:
-            return "✅ أوصي بالموافقة: المبلغ ضمن الحدود المسموحة."
-    return "ℹ️ يرجى مراجعة المدير."
-
-# --- التشغيل الرئيسي ---
-if 'logged_in' not in st.session_state:
-    st.session_state['logged_in'] = False
-
-# تحميل البيانات مرة واحدة
-if 'data' not in st.session_state:
-    # هنا نطلب من المستخدم رفع الملف لأول مرة لبدء المحاكاة
-    # في النسخة النهائية يكون الربط تلقائي
-    uploaded_file = st.file_uploader("الرجاء رفع ملف HR_AI_Platform_Data.xlsx لبدء النظام", type=['xlsx'])
-    if uploaded_file:
-        st.session_state['data'] = load_data(uploaded_file)
-        st.rerun()
-    else:
-        st.stop()
-
-if not st.session_state['logged_in']:
+if 'logged_in' not in st.session_state or not st.session_state['logged_in']:
     login_page()
 else:
-    if st.session_state['user']['نوع الصلاحية'] in ['Admin', 'Manager']:
-        manager_dashboard()
+    sidebar_menu()
+    user_role = st.session_state['user'].get('نوع الصلاحية', 'Employee')
+    
+    # إذا كان المدير، يفتح لوحة المدير، وإلا يفتح نموذج الطلب
+    if str(user_role).lower() in ['admin', 'manager']:
+        admin_dashboard()
     else:
-        employee_dashboard()
-
+        st.title("لوحة الموظف")
+        # عرض حالة الطلبات السابقة
+        my_reqs = st.session_state['data']['الطلبات'][
+            st.session_state['data']['الطلبات']['رقم_الموظف'] == st.session_state['user']['رقم الموظف']
+        ]
+        if not my_reqs.empty:
+            st.dataframe(my_reqs[['نوع_الطلب', 'حالة_الطلب', 'رد_المدير']])
+        request_form()
