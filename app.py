@@ -5,226 +5,240 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import time
 
-# --- 1. إعدادات التصميم (CSS الاحترافي) ---
-st.set_page_config(page_title="بوابة الموظف الذكية", layout="wide", page_icon="🏢")
+# --- 1. إعدادات الصفحة والتصميم ---
+st.set_page_config(page_title="بوابة الخدمات الذكية", layout="wide", page_icon="🏢")
 
 st.markdown("""
 <style>
-    /* تحسين البطاقات في القائمة الرئيسية */
+    /* تحسين البطاقات */
     .service-card {
-        background-color: #f8f9fa;
-        padding: 20px;
-        border-radius: 10px;
-        border: 1px solid #e9ecef;
+        background-color: white;
+        padding: 25px;
+        border-radius: 12px;
+        border: 1px solid #e0e0e0;
         text-align: center;
         transition: 0.3s;
-        cursor: pointer;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
     .service-card:hover {
         transform: translateY(-5px);
-        box-shadow: 0 8px 15px rgba(0,0,0,0.1);
-        background-color: #e3f2fd;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.1);
         border-color: #2196f3;
     }
-    h3 {color: #2c3e50;}
+    /* تنسيق العناوين */
+    h1, h2, h3 { font-family: 'Segoe UI', sans-serif; color: #2c3e50; }
     
-    /* زر الرجوع */
+    /* الأزرار */
     .stButton>button {
         width: 100%;
         border-radius: 8px;
+        height: 50px;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. دوال الاتصال (نفس الكود الذي يعمل لديك) ---
+# --- 2. دوال الاتصال بـ Google Sheets ---
 @st.cache_resource
 def init_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     try:
-        # قراءة المفتاح من Secrets
         if "gcp_service_account" in st.secrets:
             creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
         else:
             return None
-        client = gspread.authorize(creds)
-        return client
+        return gspread.authorize(creds)
     except Exception as e:
         st.error(f"❌ خطأ اتصال: {e}")
         return None
 
-def save_to_google_sheet(data):
+# --- 3. زر الإصلاح (لتوحيد أعمدة الإكسل) ---
+with st.expander("⚠️ إعدادات المدير (اضغط هنا لإصلاح ملف الإكسل أول مرة)"):
+    if st.button("🛠️ إعادة بناء ورقة الطلبات (سيحذف البيانات القديمة)"):
+        client = init_connection()
+        if client:
+            sh = client.open_by_url("https://docs.google.com/spreadsheets/d/1WxcTEwCeou6NyHk0FX36Z4FbFEXD7PGNutAyEUhUDFs/edit")
+            try:
+                try: sh.del_worksheet(sh.worksheet("الطلبات"))
+                except: pass
+                
+                # إنشاء الورقة بالأعمدة الصحيحة
+                ws = sh.add_worksheet(title="الطلبات", rows="1000", cols="20")
+                headers = [
+                    "رقم_الطلب", "تاريخ_الطلب", "رقم_الموظف", "اسم_الموظف", "القسم",
+                    "نوع_الخدمة", "التفاصيل_الفرعية", "شرح_الطلب", "المبلغ_المالي", 
+                    "المدة_بالأيام", "تاريخ_البداية", "تاريخ_النهاية", "وقت_الاستئذان", 
+                    "حالة_الطلب", "رد_المدير", "توصية_AI"
+                ]
+                ws.append_row(headers)
+                st.success("✅ تم إصلاح ملف الإكسل! البيانات الجديدة ستنزل مرتبة الآن.")
+            except Exception as e:
+                st.error(f"حدث خطأ: {e}")
+
+# --- 4. دالة الحفظ الذكية (المحدثة) ---
+def save_to_sheet(data_row):
     client = init_connection()
     if not client: return False
     try:
         sh = client.open_by_url("https://docs.google.com/spreadsheets/d/1WxcTEwCeou6NyHk0FX36Z4FbFEXD7PGNutAyEUhUDFs/edit")
-        # التأكد من وجود ورقة الطلبات
-        try:
-            ws = sh.worksheet("الطلبات")
-        except:
-            ws = sh.add_worksheet(title="الطلبات", rows="1000", cols="20")
-            ws.append_row(["id", "emp_id", "name", "type", "details", "amount", "days", "date", "status"])
-        
-        ws.append_row(data)
+        ws = sh.worksheet("الطلبات")
+        ws.append_row(data_row)
         return True
-    except Exception as e:
-        st.error(f"فشل الحفظ: {e}")
+    except:
+        st.error("لم يتم العثور على ورقة 'الطلبات'. الرجاء ضغط زر الإصلاح بالأعلى.")
         return False
 
-# --- 3. إدارة الصفحات (Navigation) ---
-if 'page' not in st.session_state: st.session_state['page'] = 'login'
-if 'current_service' not in st.session_state: st.session_state['current_service'] = None
-
-def navigate_to(page, service=None):
-    st.session_state['page'] = page
-    if service: st.session_state['current_service'] = service
-    st.rerun()
-
-# --- 4. الصفحات (الشاشات) ---
-
-# أ. الشاشة الرئيسية (لوحة الخدمات)
-def dashboard_page():
-    st.title("🏢 الخدمات الإلكترونية")
-    st.markdown("---")
+def submit_request(service_main, sub_type, details, amount, days, start_d="-", end_d="-", time_range="-"):
+    user = st.session_state.get('user', {'رقم الموظف': '000', 'اسم الموظف': 'Guest', 'الهيكل الإداري': 'عام'})
     
-    # تصميم الشبكة (Grid) للخدمات
-    col1, col2, col3 = st.columns(3)
+    # تجهيز الصف بنفس ترتيب الأعمدة الجديد
+    row = [
+        int(time.time()),               # رقم الطلب
+        str(datetime.now().date()),     # تاريخ
+        user['رقم الموظف'],
+        user['اسم الموظف'],
+        user.get('الهيكل الإداري', 'غير محدد'),
+        service_main,                   # نوع الخدمة
+        sub_type,                       # النوع الفرعي
+        details,                        # التفاصيل
+        amount,                         # المبلغ
+        days,                           # الأيام
+        str(start_d),                   # تاريخ بداية
+        str(end_d),                     # تاريخ نهاية
+        str(time_range),                # وقت الاستئذان
+        "تحت المراجعة",
+        "-",
+        "جاري التحليل..."
+    ]
     
-    with col1:
-        st.info("🌴 **الإجازات**")
-        if st.button("تقديم طلب إجازة", key="btn_leave"):
-            navigate_to("service_form", "leave")
-            
-        st.write("") # مسافة
-        st.warning("🛒 **المشتريات**")
-        if st.button("طلب مشتريات", key="btn_purchase"):
-            navigate_to("service_form", "purchase")
+    if save_to_sheet(row):
+        st.balloons()
+        st.success("✅ تم إرسال طلبك بنجاح وحفظه في النظام!")
+        time.sleep(2)
+        st.session_state['page'] = 'dashboard'
+        st.rerun()
 
-    with col2:
-        st.success("💰 **السلف والقروض**")
-        if st.button("طلب سلفة مالية", key="btn_loan"):
-            navigate_to("service_form", "loan")
-            
-        st.write("")
-        st.error("✈️ **رحلات العمل**")
-        if st.button("طلب رحلة عمل", key="btn_travel"):
-            navigate_to("service_form", "travel")
+# --- 5. إدارة الصفحات ---
+if 'page' not in st.session_state: st.session_state['page'] = 'dashboard' # (تجاوزنا اللوجن للتجربة)
+if 'service' not in st.session_state: st.session_state['service'] = None
 
-    with col3:
-        st.info("⏱️ **الاستئذان**")
-        if st.button("طلب استئذان", key="btn_permission"):
-            navigate_to("service_form", "permission")
-            
-        st.write("")
-        if st.button("📂 سجل طلباتي السابق", key="btn_history"):
-            navigate_to("history")
-
-# ب. شاشة النموذج الموحد (ديناميكية حسب الخدمة)
-def service_form_page():
-    service = st.session_state['current_service']
-    
-    # زر الرجوع في الأعلى
-    if st.button("🔙 العودة للقائمة الرئيسية"):
-        navigate_to("dashboard")
-    
-    st.markdown("---")
-    
-    # 1. نموذج الإجازات
-    if service == "leave":
-        st.header("🌴 تقديم طلب إجازة")
-        with st.form("leave_form"):
-            l_type = st.selectbox("نوع الإجازة", ["سنوية", "اضطرارية", "مرضية", "بدون راتب"])
-            c1, c2 = st.columns(2)
-            start_date = c1.date_input("تاريخ البداية")
-            end_date = c2.date_input("تاريخ النهاية")
-            days = st.number_input("عدد الأيام", min_value=1)
-            reason = st.text_area("سبب الإجازة / الملاحظات")
-            
-            if st.form_submit_button("إرسال طلب الإجازة"):
-                submit_request("إجازة", l_type, reason, 0, days)
-
-    # 2. نموذج السلف
-    elif service == "loan":
-        st.header("💰 تقديم طلب سلفة")
-        with st.form("loan_form"):
-            amount = st.number_input("المبلغ المطلوب (ريال)", min_value=500, step=500)
-            months = st.slider("مدة السداد (أشهر)", 1, 12, 3)
-            reason = st.text_area("الغرض من السلفة")
-            
-            if st.form_submit_button("إرسال طلب السلفة"):
-                submit_request("سلفة", f"سداد على {months} أشهر", reason, amount, 0)
-
-    # 3. نموذج الاستئذان
-    elif service == "permission":
-        st.header("⏱️ طلب استئذان")
-        with st.form("perm_form"):
-            p_date = st.date_input("تاريخ الاستئذان")
-            c1, c2 = st.columns(2)
-            time_from = c1.time_input("من الساعة")
-            time_to = c2.time_input("إلى الساعة")
-            reason = st.text_area("السبب")
-            
-            if st.form_submit_button("إرسال الاستئذان"):
-                submit_request("استئذان", f"{time_from} - {time_to}", reason, 0, 0)
-
-    # 4. نموذج المشتريات
-    elif service == "purchase":
-        st.header("🛒 طلب مشتريات")
-        with st.form("purchase_form"):
-            item = st.text_input("اسم السلعة / الخدمة")
-            cost = st.number_input("التكلفة التقديرية", min_value=0)
-            reason = st.text_area("مبررات الشراء")
-            
-            if st.form_submit_button("اعتماد طلب الشراء"):
-                submit_request("مشتريات", item, reason, cost, 0)
-
-    # 5. نموذج رحلة العمل
-    elif service == "travel":
-        st.header("✈️ طلب رحلة عمل")
-        with st.form("travel_form"):
-            dest = st.text_input("الوجهة (المدينة/الدولة)")
-            c1, c2 = st.columns(2)
-            d_from = c1.date_input("تاريخ الذهاب")
-            d_to = c2.date_input("تاريخ العودة")
-            purpose = st.text_area("الهدف من الزيارة")
-            
-            if st.form_submit_button("إرسال طلب الرحلة"):
-                submit_request("رحلة عمل", dest, purpose, 0, (d_to - d_from).days)
-
-# دالة الحفظ الموحدة
-def submit_request(rtype, sub_type, details, amount, days):
-    user = st.session_state.get('user', {'رقم الموظف': '000', 'اسم الموظف': 'Guest'})
-    
-    with st.spinner("جاري حفظ الطلب في النظام..."):
-        row_data = [
-            int(time.time()),
-            user['رقم الموظف'],
-            user['اسم الموظف'],
-            f"{rtype} - {sub_type}",
-            details,
-            amount,
-            days,
-            str(datetime.now().date()),
-            "تحت المراجعة"
-        ]
-        
-        if save_to_google_sheet(row_data):
-            st.success("✅ تم حفظ الطلب بنجاح!")
-            time.sleep(1.5)
-            navigate_to("dashboard")
-
-# --- تشغيل التطبيق ---
-# تجاوز تسجيل الدخول للتجربة (يمكنك تفعيله لاحقاً)
+# تعريف المستخدم الافتراضي (للتجربة)
 if 'user' not in st.session_state:
-    st.session_state['user'] = {'رقم الموظف': '1001', 'اسم الموظف': 'مدير النظام (تجريبي)'}
+    st.session_state['user'] = {'رقم الموظف': '1011', 'اسم الموظف': 'موظف تجريبي', 'الهيكل الإداري': 'IT'}
 
-if st.session_state['page'] == 'login':
-    navigate_to("dashboard") # تخطي مؤقت
-elif st.session_state['page'] == 'dashboard':
-    dashboard_page()
-elif st.session_state['page'] == 'service_form':
-    service_form_page()
-elif st.session_state['page'] == 'history':
-    st.title("سجل الطلبات")
-    if st.button("عودة"): navigate_to("dashboard")
-    # هنا يمكنك إضافة كود عرض الجدول من Google Sheets
+# --- 6. تصميم الواجهات ---
+def dashboard():
+    st.title("👋 مرحباً، " + st.session_state['user']['اسم الموظف'])
+    st.markdown("### اختر الخدمة المطلوبة:")
+    
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.markdown('<div class="service-card"><h3>🌴 الإجازات</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب إجازة جديد"):
+            st.session_state['service'] = 'leave'
+            st.session_state['page'] = 'form'
+            st.rerun()
+            
+        st.markdown('<div class="service-card"><h3>🛒 المشتريات</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب شراء"):
+            st.session_state['service'] = 'purchase'
+            st.session_state['page'] = 'form'
+            st.rerun()
+
+    with c2:
+        st.markdown('<div class="service-card"><h3>💰 السلف المالية</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب سلفة"):
+            st.session_state['service'] = 'loan'
+            st.session_state['page'] = 'form'
+            st.rerun()
+            
+        st.markdown('<div class="service-card"><h3>✈️ رحلات العمل</h3></div>', unsafe_allow_html=True)
+        if st.button("انتداب / رحلة"):
+            st.session_state['service'] = 'travel'
+            st.session_state['page'] = 'form'
+            st.rerun()
+
+    with c3:
+        st.markdown('<div class="service-card"><h3>⏱️ الاستئذان</h3></div>', unsafe_allow_html=True)
+        if st.button("تسجيل استئذان"):
+            st.session_state['service'] = 'perm'
+            st.session_state['page'] = 'form'
+            st.rerun()
+            
+        st.markdown('<div class="service-card"><h3>📂 طلباتي</h3></div>', unsafe_allow_html=True)
+        if st.button("متابعة الطلبات"):
+            st.info("قريباً...")
+
+def form_page():
+    svc = st.session_state['service']
+    
+    if st.button("🔙 عودة للقائمة الرئيسية"):
+        st.session_state['page'] = 'dashboard'
+        st.rerun()
+    
+    st.markdown("---")
+    
+    # --- نموذج الإجازة ---
+    if svc == 'leave':
+        st.header("🌴 طلب إجازة")
+        with st.form("f1"):
+            t = st.selectbox("النوع", ["سنوية", "اضطرارية", "مرضية"])
+            c1, c2 = st.columns(2)
+            d1 = c1.date_input("من تاريخ")
+            d2 = c2.date_input("إلى تاريخ")
+            days = st.number_input("المدة (أيام)", 1)
+            det = st.text_area("ملاحظات")
+            if st.form_submit_button("إرسال"):
+                submit_request("إجازة", t, det, 0, days, d1, d2)
+
+    # --- نموذج السلفة ---
+    elif svc == 'loan':
+        st.header("💰 طلب سلفة")
+        with st.form("f2"):
+            amt = st.number_input("المبلغ", 1000)
+            mon = st.slider("أشهر السداد", 1, 12, 3)
+            det = st.text_area("السبب")
+            if st.form_submit_button("إرسال"):
+                submit_request("سلفة", f"سداد {mon} شهر", det, amt, 0)
+
+    # --- نموذج الاستئذان ---
+    elif svc == 'perm':
+        st.header("⏱️ طلب استئذان")
+        with st.form("f3"):
+            day = st.date_input("اليوم")
+            c1, c2 = st.columns(2)
+            t1 = c1.time_input("من")
+            t2 = c2.time_input("إلى")
+            det = st.text_area("الظرف/السبب")
+            if st.form_submit_button("إرسال"):
+                submit_request("استئذان", "ساعي", det, 0, 0, day, day, f"{t1}-{t2}")
+
+    # --- نموذج المشتريات ---
+    elif svc == 'purchase':
+        st.header("🛒 طلب شراء")
+        with st.form("f4"):
+            item = st.text_input("اسم المنتج")
+            cost = st.number_input("التكلفة التقريبية", 0)
+            det = st.text_area("مبررات الشراء")
+            if st.form_submit_button("إرسال"):
+                submit_request("مشتريات", item, det, cost, 0)
+                
+    # --- نموذج الرحلات ---
+    elif svc == 'travel':
+        st.header("✈️ طلب رحلة عمل")
+        with st.form("f5"):
+            dest = st.text_input("الوجهة")
+            c1, c2 = st.columns(2)
+            d1 = c1.date_input("الذهاب")
+            d2 = c2.date_input("العودة")
+            purp = st.text_area("الغرض من الزيارة")
+            if st.form_submit_button("إرسال"):
+                days_diff = (d2 - d1).days
+                submit_request("رحلة عمل", dest, purp, 0, days_diff, d1, d2)
+
+# --- 7. الموجه الرئيسي ---
+if st.session_state['page'] == 'dashboard':
+    dashboard()
+elif st.session_state['page'] == 'form':
+    form_page()
