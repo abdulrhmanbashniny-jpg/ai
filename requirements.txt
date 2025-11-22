@@ -1,5 +1,7 @@
 streamlit
-pandas
 plotly
 openpyxl
-pip install gspread oauth2client
+pandas
+gspread
+oauth2client
+
