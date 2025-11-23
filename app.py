@@ -1,8 +1,9 @@
 import streamlit as st
-from supabase import create_client
+from supabase import create_client, ClientOptions
 import pandas as pd
 from datetime import datetime
 import time
+import urllib.parse
 
 # --- 1. إعدادات الصفحة ---
 st.set_page_config(page_title="HR Enterprise System", layout="wide", page_icon="🏢")
@@ -26,13 +27,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. الاتصال بـ Supabase ---
+# --- 2. الاتصال بـ Supabase (مع زيادة وقت الانتظار) ---
 @st.cache_resource
 def init_supabase():
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
-        return create_client(url, key)
+        # زيادة المهلة الزمنية إلى 60 ثانية لتجنب ReadError
+        return create_client(url, key, options=ClientOptions(postgrest_client_timeout=60))
     except Exception as e:
         st.error(f"خطأ في إعدادات الاتصال: {e}")
         return None
@@ -42,8 +44,11 @@ supabase = init_supabase()
 # --- 3. دوال البيانات ---
 def get_user_data(uid):
     if not supabase: return None
-    res = supabase.table("employees").select("*").eq("emp_id", uid).execute()
-    if res.data: return res.data[0]
+    try:
+        res = supabase.table("employees").select("*").eq("emp_id", uid).execute()
+        if res.data: return res.data[0]
+    except Exception as e:
+        st.error(f"خطأ جلب المستخدم: {e}")
     return None
 
 def submit_request_db(data):
@@ -52,51 +57,75 @@ def submit_request_db(data):
         supabase.table("requests").insert(data).execute()
         return True
     except Exception as e:
-        st.error(f"خطأ: {e}")
+        st.error(f"خطأ في الحفظ: {e}")
         return False
 
 def get_requests_for_role(role, uid, dept):
     if not supabase: return []
     requests = []
     
-    # 1. البحث عن الطلبات التي أنا فيها "موظف بديل"
-    sub_reqs = supabase.table("requests").select("*").eq("substitute_id", uid).eq("status_substitute", "Pending").execute().data
-    if sub_reqs:
-        for r in sub_reqs: r['task_type'] = 'Substitute'
-        requests.extend(sub_reqs)
+    try:
+        # 1. البحث عن الطلبات التي أنا فيها "موظف بديل"
+        sub_res = supabase.table("requests").select("*").eq("substitute_id", uid).eq("status_substitute", "Pending").execute()
+        if sub_res.data:
+            for r in sub_res.data: r['task_type'] = 'Substitute'
+            requests.extend(sub_res.data)
 
-    # 2. مهام المدير
-    if role == "Manager":
-        # المدير يرى طلبات قسمه
-        mgr_reqs = supabase.table("requests").select("*").eq("dept", dept).eq("status_manager", "Pending").execute().data
-        for r in mgr_reqs:
-            # شرط: البديل وافق أو لا يوجد بديل
-            if r.get('status_substitute') in ['Approved', 'Not Required']:
-                r['task_type'] = 'Manager'
-                requests.append(r)
+        # 2. مهام المدير
+        if role == "Manager":
+            mgr_res = supabase.table("requests").select("*").eq("dept", dept).eq("status_manager", "Pending").execute()
+            if mgr_res.data:
+                for r in mgr_res.data:
+                    # شرط: البديل وافق أو لا يوجد بديل
+                    if r.get('status_substitute') in ['Approved', 'Not Required']:
+                        r['task_type'] = 'Manager'
+                        requests.append(r)
 
-    # 3. مهام الـ HR
-    if role == "HR":
-        hr_reqs = supabase.table("requests").select("*").eq("status_manager", "Approved").eq("status_hr", "Pending").execute().data
-        for r in hr_reqs:
-            r['task_type'] = 'HR'
-            requests.append(r)
+        # 3. مهام الـ HR
+        if role == "HR":
+            hr_res = supabase.table("requests").select("*").eq("status_manager", "Approved").eq("status_hr", "Pending").execute()
+            if hr_res.data:
+                for r in hr_res.data:
+                    r['task_type'] = 'HR'
+                    requests.append(r)
+    except Exception as e:
+        st.error(f"خطأ جلب المهام: {e}")
             
     return requests
 
 def update_status_db(req_id, field, status, note, user_name):
     if not supabase: return
-    # هنا كان الخطأ سابقاً، الآن الأعمدة موجودة في Supabase
+    
+    # تحديد أسماء الأعمدة بدقة لتجنب الأخطاء
+    note_col = ""
+    time_col = ""
+    
+    if field == "status_substitute":
+        note_col = "substitute_note"
+        time_col = "substitute_action_at"
+    elif field == "status_manager":
+        note_col = "manager_note"
+        time_col = "manager_action_at"
+    elif field == "status_hr":
+        note_col = "hr_note"
+        time_col = "hr_action_at"
+        
     data = {
         field: status,
-        f"{field.replace('status_', '')}_note": note,
-        f"{field.replace('status_', '')}_action_at": datetime.now().isoformat()
+        note_col: note,
+        time_col: datetime.now().isoformat()
     }
+    
+    # تحديث الحالة النهائية
     if field == "status_hr" and status == "Approved":
         data["final_status"] = "Approved"
     elif status == "Rejected":
         data["final_status"] = "Rejected"
-    supabase.table("requests").update(data).eq("id", req_id).execute()
+        
+    try:
+        supabase.table("requests").update(data).eq("id", req_id).execute()
+    except Exception as e:
+        st.error(f"فشل التحديث: {e}")
 
 # --- 4. الصفحات ---
 
@@ -127,16 +156,10 @@ def dashboard_page():
     with c1:
         st.markdown('<div class="service-card"><h3>🌴 الإجازات</h3></div>', unsafe_allow_html=True)
         if st.button("تقديم طلب إجازة"): nav("leave")
-        st.markdown('<div class="service-card"><h3>🛒 المشتريات</h3></div>', unsafe_allow_html=True)
-        if st.button("طلب شراء"): nav("purchase")
     with c2:
         st.markdown('<div class="service-card"><h3>💰 السلف المالية</h3></div>', unsafe_allow_html=True)
         if st.button("تقديم طلب سلفة"): nav("loan")
-        st.markdown('<div class="service-card"><h3>✈️ رحلات العمل</h3></div>', unsafe_allow_html=True)
-        if st.button("طلب انتداب"): nav("travel")
     with c3:
-        st.markdown('<div class="service-card"><h3>⏱️ الاستئذان</h3></div>', unsafe_allow_html=True)
-        if st.button("تسجيل استئذان"): nav("perm")
         st.markdown('<div class="service-card"><h3>📂 ملفي والطلبات</h3></div>', unsafe_allow_html=True)
         if st.button("سجل المعاملات"): st.session_state['page']='my_requests'; st.rerun()
 
