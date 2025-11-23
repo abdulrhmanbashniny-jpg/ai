@@ -18,15 +18,13 @@ st.markdown("""
     .service-card:hover {
         transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); border-color: #2196f3;
     }
-    .status-pending { color: orange; font-weight: bold; }
-    .status-approved { color: green; font-weight: bold; }
-    .status-rejected { color: red; font-weight: bold; }
-    h1, h2, h3 { font-family: 'Segoe UI', sans-serif; color: #2c3e50; }
     .stButton>button { width: 100%; border-radius: 8px; height: 45px; font-weight: bold; }
+    /* تحسين الجدول */
+    .stDataFrame { border-radius: 10px; overflow: hidden; border: 1px solid #eee; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. الاتصال وقاعدة البيانات ---
+# --- 2. الاتصال ---
 @st.cache_resource
 def init_connection():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -37,34 +35,45 @@ def init_connection():
         return None
     except: return None
 
-# --- 3. أدوات المدير (إصلاح الأعمدة الجديدة) ---
-with st.sidebar.expander("🛠️ أدوات النظام (اضغط هنا لتحديث الأعمدة)"):
-    if st.button("تحديث هيكل الإكسل (للإضافات الجديدة)"):
-        client = init_connection()
-        if client:
-            sh = client.open_by_url("https://docs.google.com/spreadsheets/d/1WxcTEwCeou6NyHk0FX36Z4FbFEXD7PGNutAyEUhUDFs/edit")
-            try:
-                try: sh.del_worksheet(sh.worksheet("الطلبات"))
-                except: pass
-                ws = sh.add_worksheet(title="الطلبات", rows="1000", cols="25")
-                # أضفنا أعمدة جديدة: المرفقات، وقت_الموافقة، مدة_الإجراء
-                headers = [
-                    "رقم_الطلب", "وقت_الطلب", "رقم_الموظف", "اسم_الموظف", "القسم", 
-                    "نوع_الخدمة", "التفاصيل", "شرح_الطلب", "المبلغ", "الأيام", 
-                    "تاريخ_البداية", "تاريخ_النهاية", "وقت_الاستئذان", 
-                    "حالة_الطلب", "رد_المدير", "وقت_الرد", "مدة_الإجراء_ساعة", "المرفقات", "توصية_AI"
-                ]
-                ws.append_row(headers)
-                st.success("✅ تم تحديث الأعمدة لتشمل المرفقات والتحليل الزمني!")
-            except: st.error("فشل الاتصال")
+# --- 3. التحديث الذكي ---
+def smart_update_columns():
+    client = init_connection()
+    if not client: return False, "فشل الاتصال"
+    try:
+        sh = client.open_by_url("https://docs.google.com/spreadsheets/d/1WxcTEwCeou6NyHk0FX36Z4FbFEXD7PGNutAyEUhUDFs/edit")
+        ws = sh.worksheet("الطلبات")
+        required = [
+            "رقم_الطلب", "وقت_الطلب", "رقم_الموظف", "اسم_الموظف", "القسم", 
+            "نوع_الخدمة", "التفاصيل", "شرح_الطلب", "المبلغ", "الأيام", 
+            "تاريخ_البداية", "تاريخ_النهاية", "وقت_الاستئذان", 
+            "حالة_الطلب", "رد_المدير", "وقت_الرد", "مدة_الإجراء_ساعة", "المرفقات", "توصية_AI"
+        ]
+        current = ws.row_values(1)
+        missing = [h for h in required if h not in current]
+        if missing:
+            ws.add_cols(len(missing))
+            start = len(current) + 1
+            for i, h in enumerate(missing): ws.update_cell(1, start + i, h)
+            return True, f"تمت إضافة: {missing}"
+        return True, "محدث"
+    except Exception as e: return False, str(e)
 
-# --- 4. دوال البيانات ---
-def save_to_sheet(row):
+with st.sidebar.expander("🛠️ صيانة النظام"):
+    if st.button("تحديث قاعدة البيانات"):
+        ok, msg = smart_update_columns()
+        if ok: st.success(msg)
+        else: st.error(msg)
+
+# --- 4. البيانات ---
+def save_to_sheet(row_dict):
     client = init_connection()
     if not client: return False
     try:
         sh = client.open_by_url("https://docs.google.com/spreadsheets/d/1WxcTEwCeou6NyHk0FX36Z4FbFEXD7PGNutAyEUhUDFs/edit")
-        sh.worksheet("الطلبات").append_row(row)
+        ws = sh.worksheet("الطلبات")
+        headers = ws.row_values(1)
+        vals = [str(row_dict.get(h, "-")) for h in headers]
+        ws.append_row(vals)
         return True
     except: return False
 
@@ -77,40 +86,42 @@ def get_all_requests():
         return pd.DataFrame(data)
     except: return pd.DataFrame()
 
-def update_request_status(req_id, status, manager_note, manager_name):
+def update_status(req_id, status, note, mgr_name):
     client = init_connection()
     if not client: return False
     try:
         sh = client.open_by_url("https://docs.google.com/spreadsheets/d/1WxcTEwCeou6NyHk0FX36Z4FbFEXD7PGNutAyEUhUDFs/edit")
         ws = sh.worksheet("الطلبات")
-        cell = ws.find(str(req_id)) # البحث عن رقم الطلب
+        cell = ws.find(str(req_id))
         if cell:
-            row = cell.row
-            # تحديث الحالة (العمود 14)
-            ws.update_cell(row, 14, status)
-            # تحديث رد المدير (العمود 15)
-            ws.update_cell(row, 15, f"{manager_note} (بواسطة: {manager_name})")
-            # تحديث وقت الرد (العمود 16)
-            reply_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            ws.update_cell(row, 16, reply_time)
+            r = cell.row
+            hdrs = ws.row_values(1)
             
-            # حساب مدة الإجراء (التحليل الزمني)
-            # نجلب وقت الطلب (العمود 2)
-            req_time_str = ws.cell(row, 2).value
+            # دوال مساعدة لتحديث الخلية حسب اسم العمود
+            def upd(col_name, val):
+                if col_name in hdrs:
+                    ws.update_cell(r, hdrs.index(col_name)+1, val)
+
+            upd("حالة_الطلب", status)
+            upd("رد_المدير", f"{note} ({mgr_name})")
+            
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            upd("وقت_الرد", now_str)
+            
+            # حساب الوقت
             try:
-                fmt = "%Y-%m-%d %H:%M:%S"
-                t1 = datetime.strptime(req_time_str, fmt)
-                t2 = datetime.strptime(reply_time, fmt)
-                duration_hours = round((t2 - t1).total_seconds() / 3600, 2)
-                ws.update_cell(row, 17, duration_hours) # العمود 17: مدة الإجراء
-            except:
-                ws.update_cell(row, 17, "خطأ في التنسيق")
-                
+                req_time_idx = hdrs.index("وقت_الطلب") + 1
+                req_val = ws.cell(r, req_time_idx).value
+                t1 = datetime.strptime(str(req_val), "%Y-%m-%d %H:%M:%S")
+                t2 = datetime.strptime(now_str, "%Y-%m-%d %H:%M:%S")
+                hrs = round((t2-t1).total_seconds()/3600, 2)
+                upd("مدة_الإجراء_ساعة", hrs)
+            except: pass
             return True
     except: return False
     return False
 
-# --- 5. إدارة الجلسة ---
+# --- 5. الجلسة والدخول ---
 if 'page' not in st.session_state: st.session_state['page'] = 'login'
 if 'user' not in st.session_state: st.session_state['user'] = None
 
@@ -118,241 +129,192 @@ def login_page():
     st.markdown("<br><br><h1 style='text-align: center; color:#2980b9;'>🔐 بوابة الموظفين</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        with st.form("login_form"):
+        with st.form("log"):
             uid = st.text_input("رقم الموظف")
             pwd = st.text_input("كلمة المرور", type="password")
-            is_manager = st.checkbox("دخول كمدير قسم / مسؤول")
-            
+            is_mgr = st.checkbox("دخول كمدير / مسؤول")
             if st.form_submit_button("دخول"):
-                # محاكاة الدخول (يمكنك ربطها بالإكسل لاحقاً)
-                role = "Manager" if is_manager else "Employee"
-                # إذا كان المدير 1001 فهو Admin (يرى كل شيء)، غيره يرى قسمه
-                user_dept = "المشتريات" if uid == "1011" else "الموارد البشرية"
+                # منطق الدخول المحسن
+                role = "Manager" if is_mgr else "Employee"
+                dept = "المشتريات"  # افتراضي للتجربة، في النظام الحقيقي يجلب من ملف الموظفين
                 
+                # للتجربة: إذا دخل بصفة مدير، سنعتبره "مدير عام" يرى كل الأقسام مؤقتاً
+                # لحل مشكلة عدم ظهور الطلبات
                 st.session_state['user'] = {
                     'رقم الموظف': uid,
-                    'اسم الموظف': f"الموظف {uid}",
-                    'الهيكل الإداري': user_dept,
+                    'اسم الموظف': f"المستخدم {uid}",
+                    'الهيكل الإداري': dept, # هذا القسم المسجل له
                     'الصلاحية': role
                 }
                 st.session_state['page'] = 'dashboard'
                 st.rerun()
 
-# القائمة الجانبية
 if st.session_state['user']:
-    user = st.session_state['user']
+    u = st.session_state['user']
     with st.sidebar:
-        st.header(f"👤 {user['اسم الموظف']}")
-        st.info(f"الدور: {user['الصلاحية']} | القسم: {user['الهيكل الإداري']}")
-        
+        st.header(f"👤 {u['اسم الموظف']}")
+        st.info(f"الصلاحية: {u['الصلاحية']}")
         st.markdown("---")
-        if st.button("🏠 الرئيسية"):
-            st.session_state['page'] = 'dashboard'
-            st.rerun()
-            
-        # زر خاص بالمدير فقط
-        if user['الصلاحية'] == 'Manager':
-            if st.button("✅ اعتماد الطلبات"):
-                st.session_state['page'] = 'approvals'
-                st.rerun()
-                
-        if st.button("🚪 تسجيل الخروج"):
-            st.session_state['user'] = None
-            st.session_state['page'] = 'login'
-            st.rerun()
+        if st.button("🏠 الرئيسية"): st.session_state['page']='dashboard'; st.rerun()
+        if u['الصلاحية'] == 'Manager':
+            if st.button("✅ اعتماد الطلبات"): st.session_state['page']='approvals'; st.rerun()
+        if st.button("🚪 خروج"): st.session_state['user']=None; st.session_state['page']='login'; st.rerun()
 
 # --- 6. الصفحات ---
-
-# أ. لوحة التحكم
 def dashboard_page():
-    user = st.session_state['user']
-    st.title(f"👋 مرحباً بك في قسم {user['الهيكل الإداري']}")
-    
-    # لوحة المدير (تنبيهات)
-    if user['الصلاحية'] == 'Manager':
-        st.warning("🔔 لديك صلاحيات مدير: يرجى مراجعة صفحة 'اعتماد الطلبات' دورياً.")
+    u = st.session_state['user']
+    st.title(f"مرحباً، {u['اسم الموظف']}")
+    if u['الصلاحية'] == 'Manager':
+        st.warning("🔔 أنت في وضع المدير: يمكنك اعتماد الطلبات من القائمة الجانبية.")
     
     st.write("---")
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown('<div class="service-card"><h3>🌴 الإجازات</h3></div>', unsafe_allow_html=True)
-        if st.button("تقديم طلب إجازة"): navigate("leave")
-        st.markdown('<div class="service-card"><h3>🛒 المشتريات</h3></div>', unsafe_allow_html=True)
-        if st.button("طلب شراء"): navigate("purchase")
+        st.markdown('<div class="service-card"><h3>🌴 إجازات</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب إجازة"): nav("leave")
+        st.markdown('<div class="service-card"><h3>🛒 مشتريات</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب شراء"): nav("purchase")
     with c2:
-        st.markdown('<div class="service-card"><h3>💰 السلف</h3></div>', unsafe_allow_html=True)
-        if st.button("طلب سلفة"): navigate("loan")
-        st.markdown('<div class="service-card"><h3>✈️ الرحلات</h3></div>', unsafe_allow_html=True)
-        if st.button("طلب رحلة عمل"): navigate("travel")
+        st.markdown('<div class="service-card"><h3>💰 سلف</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب سلفة"): nav("loan")
+        st.markdown('<div class="service-card"><h3>✈️ رحلات</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب رحلة"): nav("travel")
     with c3:
-        st.markdown('<div class="service-card"><h3>⏱️ الاستئذان</h3></div>', unsafe_allow_html=True)
-        if st.button("تسجيل استئذان"): navigate("perm")
+        st.markdown('<div class="service-card"><h3>⏱️ استئذان</h3></div>', unsafe_allow_html=True)
+        if st.button("تسجيل استئذان"): nav("perm")
         st.markdown('<div class="service-card" style="border-color:#f39c12;"><h3>📂 طلباتي</h3></div>', unsafe_allow_html=True)
-        if st.button("متابعة سجل الطلبات"):
-            st.session_state['page'] = 'my_requests'
-            st.rerun()
+        if st.button("متابعة الطلبات"): st.session_state['page']='my_requests'; st.rerun()
 
-def navigate(svc):
-    st.session_state['service'] = svc
-    st.session_state['page'] = 'form'
-    st.rerun()
+def nav(s): st.session_state['service']=s; st.session_state['page']='form'; st.rerun()
 
-# ب. صفحة اعتماد الطلبات (للمدير) - الجديدة
 def approvals_page():
-    st.title("✅ لوحة اعتماد الطلبات")
-    
+    st.title("✅ لوحة الاعتماد")
     df = get_all_requests()
+    
     if df.empty:
-        st.info("لا توجد بيانات.")
+        st.info("لا توجد طلبات مسجلة في النظام.")
         return
 
-    # فلترة: المدير يرى فقط طلبات قسمه، والحالات "تحت المراجعة"
-    user_dept = st.session_state['user']['الهيكل الإداري']
-    # تحويل القيم لنصوص للمقارنة الآمنة
-    pending_reqs = df[
-        (df['حالة_الطلب'] == 'تحت المراجعة') & 
-        (df['القسم'].astype(str) == str(user_dept))
-    ]
+    # --- تصحيح الفلترة: عرض كل الطلبات "تحت المراجعة" للمدير للتأكد ---
+    # (يمكنك لاحقاً إعادة تفعيل فلتر القسم if row['القسم'] == user_dept)
+    pending = df[df['حالة_الطلب'] == 'تحت المراجعة']
     
-    if pending_reqs.empty:
-        st.success("🎉 لا توجد طلبات معلقة في قسمك.")
+    if pending.empty:
+        st.success("🎉 لا توجد طلبات معلقة (الكل تم الرد عليه).")
+        # عرض سجل سريع لآخر الطلبات المعتمدة للتأكد
+        st.markdown("---")
+        st.caption("آخر الطلبات التي تمت معالجتها:")
+        st.dataframe(df.tail(5))
         return
-        
-    st.write(f"يوجد ({len(pending_reqs)}) طلبات بانتظار موافقتك:")
+
+    st.write(f"يوجد ({len(pending)}) طلبات تنتظر الاعتماد:")
     
-    for index, row in pending_reqs.iterrows():
-        with st.expander(f"طلب #{row['رقم_الطلب']} | {row['اسم_الموظف']} ({row['نوع_الخدمة']})", expanded=True):
+    for i, row in pending.iterrows():
+        # عنوان البطاقة
+        card_title = f"#{row['رقم_الطلب']} | {row['اسم_الموظف']} | {row['نوع_الخدمة']}"
+        
+        with st.expander(card_title, expanded=True):
             c1, c2 = st.columns([2, 1])
             with c1:
-                st.write(f"**التفاصيل:** {row['شرح_الطلب']}")
-                st.write(f"**التاريخ:** {row['وقت_الطلب']}")
-                if row['المرفقات']:
-                    st.info(f"📎 مرفق: {row['المرفقات']}")
-                st.caption(f"🤖 تحليل AI: {row['توصية_AI']}")
-            
-            with c2:
-                note = st.text_input("ملاحظات المدير", key=f"note_{row['رقم_الطلب']}")
-                col_a, col_r = st.columns(2)
-                if col_a.button("✅ موافقة", key=f"app_{row['رقم_الطلب']}"):
-                    if update_request_status(row['رقم_الطلب'], "مقبول", note, st.session_state['user']['اسم_الموظف']):
-                        st.success("تم الاعتماد!")
-                        time.sleep(1)
-                        st.rerun()
+                st.markdown(f"**القسم:** {row['القسم']}")
+                st.markdown(f"**التفاصيل:** {row['شرح_الطلب']}")
+                st.markdown(f"**الوقت:** {row['وقت_الطلب']}")
                 
-                if col_r.button("❌ رفض", key=f"rej_{row['رقم_الطلب']}"):
-                    if update_request_status(row['رقم_الطلب'], "مرفوض", note, st.session_state['user']['اسم_الموظف']):
-                        st.error("تم الرفض.")
-                        time.sleep(1)
-                        st.rerun()
+                # عرض المرفقات إن وجدت
+                if 'المرفقات' in row and str(row['المرفقات']).strip() != "":
+                    st.info(f"📎 مرفق: {row['المرفقات']}")
+                
+                # عرض المبالغ/الأيام إن وجدت
+                if int(row.get('المبلغ', 0) or 0) > 0: st.write(f"💰 المبلغ: {row['المبلغ']}")
+                if int(row.get('الأيام', 0) or 0) > 0: st.write(f"📅 المدة: {row['الأيام']} يوم")
 
-# ج. صفحة متابعة الطلبات (للموظف)
+            with c2:
+                st.markdown("### قرارك:")
+                note = st.text_input("ملاحظة", key=f"n_{row['رقم_الطلب']}")
+                col_ok, col_no = st.columns(2)
+                
+                if col_ok.button("✅ اعتماد", key=f"ok_{row['رقم_الطلب']}"):
+                    if update_status(row['رقم_الطلب'], "مقبول", note, st.session_state['user']['اسم_الموظف']):
+                        st.success("تم!"); time.sleep(1); st.rerun()
+                        
+                if col_no.button("❌ رفض", key=f"no_{row['رقم_الطلب']}"):
+                    if update_status(row['رقم_الطلب'], "مرفوض", note, st.session_state['user']['اسم_الموظف']):
+                        st.error("رفض!"); time.sleep(1); st.rerun()
+
 def my_requests_page():
-    st.title("📂 سجل طلباتي")
-    if st.button("🔙 عودة"):
-        st.session_state['page'] = 'dashboard'
-        st.rerun()
-    
+    st.title("📂 طلباتي")
+    if st.button("🔙 عودة"): st.session_state['page']='dashboard'; st.rerun()
     df = get_all_requests()
     if not df.empty:
-        # فلترة طلبات الموظف الحالي
-        my_df = df[df['رقم_الموظف'].astype(str) == str(st.session_state['user']['رقم الموظف'])]
+        # فلترة برقم الموظف الحالي
+        uid = str(st.session_state['user']['رقم الموظف'])
+        my_df = df[df['رقم_الموظف'].astype(str) == uid]
         if not my_df.empty:
-            # عرض الأعمدة المهمة بما فيها مدة الإجراء
-            cols = ['رقم_الطلب', 'نوع_الخدمة', 'حالة_الطلب', 'رد_المدير', 'وقت_الرد', 'مدة_الإجراء_ساعة']
-            valid_cols = [c for c in cols if c in my_df.columns]
-            st.dataframe(my_df[valid_cols], use_container_width=True, hide_index=True)
-        else:
-            st.info("ليس لديك طلبات.")
-    else:
-        st.info("جاري تحميل البيانات...")
+            # تنسيق الجدول للعرض
+            cols = ['رقم_الطلب', 'نوع_الخدمة', 'حالة_الطلب', 'رد_المدير', 'وقت_الرد']
+            final_cols = [c for c in cols if c in my_df.columns]
+            st.dataframe(my_df[final_cols], use_container_width=True, hide_index=True)
+        else: st.info("سجلك فارغ.")
+    else: st.info("جاري التحميل...")
 
-# د. صفحة النماذج (مع زر الرفع والوقت التلقائي)
 def form_page():
     svc = st.session_state['service']
-    if st.button("🔙 إلغاء"):
-        st.session_state['page'] = 'dashboard'
-        st.rerun()
-    
+    if st.button("🔙 إلغاء"): st.session_state['page']='dashboard'; st.rerun()
     st.write("---")
     
-    # حقل المرفقات (مشترك للكل)
-    uploaded_file = st.file_uploader("📎 إرفاق ملف/صورة (اختياري)", type=['png', 'jpg', 'pdf'])
-    file_name = uploaded_file.name if uploaded_file else ""
+    # رفع الملفات
+    up_file = st.file_uploader("📎 مرفقات (صورة/PDF)", type=['png','jpg','pdf'])
+    fname = up_file.name if up_file else ""
 
-    if svc == 'leave':
-        st.header("🌴 طلب إجازة")
+    if svc=='leave':
+        st.header("🌴 إجازة")
         with st.form("f"):
-            t = st.selectbox("النوع", ["سنوية", "اضطرارية"])
-            c1,c2 = st.columns(2)
-            d1 = c1.date_input("من")
-            d2 = c2.date_input("إلى")
-            days = st.number_input("الأيام", 1)
-            rsn = st.text_area("السبب")
-            if st.form_submit_button("إرسال"): submit("إجازة", t, rsn, 0, days, file_name, d1, d2)
-
-    elif svc == 'loan':
-        st.header("💰 طلب سلفة")
+            t=st.selectbox("النوع",["سنوية","اضطرارية"]); c1,c2=st.columns(2)
+            d1=c1.date_input("من"); d2=c2.date_input("إلى"); dy=st.number_input("أيام",1); r=st.text_area("سبب")
+            if st.form_submit_button("إرسال"): sub("إجازة",t,r,0,dy,fname,d1,d2)
+            
+    elif svc=='loan':
+        st.header("💰 سلفة")
         with st.form("f"):
-            amt = st.number_input("المبلغ", 500)
-            m = st.slider("أشهر السداد", 1, 12, 3)
-            rsn = st.text_area("الغرض")
-            if st.form_submit_button("إرسال"): submit("سلفة", f"سداد {m} أشهر", rsn, amt, 0, file_name)
+            a=st.number_input("مبلغ",500); m=st.slider("أقساط",1,12,3); r=st.text_area("غرض")
+            if st.form_submit_button("إرسال"): sub("سلفة",f"{m} أشهر",r,a,0,fname)
 
-    elif svc == 'perm':
-        st.header("⏱️ طلب استئذان")
+    elif svc=='perm':
+        st.header("⏱️ استئذان")
         with st.form("f"):
-            d = st.date_input("التاريخ")
-            c1,c2 = st.columns(2)
-            t1 = c1.time_input("من")
-            t2 = c2.time_input("إلى")
-            rsn = st.text_area("السبب")
-            if st.form_submit_button("إرسال"): submit("استئذان", "ساعي", rsn, 0, 0, file_name, d, d, f"{t1}-{t2}")
+            d=st.date_input("تاريخ"); c1,c2=st.columns(2); t1=c1.time_input("من"); t2=c2.time_input("إلى"); r=st.text_area("سبب")
+            if st.form_submit_button("إرسال"): sub("استئذان","ساعي",r,0,0,fname,d,d,f"{t1}-{t2}")
 
-    elif svc == 'purchase':
-        st.header("🛒 طلب شراء")
+    elif svc=='purchase':
+        st.header("🛒 شراء")
         with st.form("f"):
-            it = st.text_input("المادة")
-            pr = st.number_input("السعر التقريبي", 0)
-            rsn = st.text_area("السبب")
-            if st.form_submit_button("إرسال"): submit("مشتريات", it, rsn, pr, 0, file_name)
+            i=st.text_input("سلعة"); p=st.number_input("سعر",0); r=st.text_area("سبب")
+            if st.form_submit_button("إرسال"): sub("مشتريات",i,r,p,0,fname)
 
-    elif svc == 'travel':
-        st.header("✈️ رحلة عمل")
+    elif svc=='travel':
+        st.header("✈️ رحلة")
         with st.form("f"):
-            dst = st.text_input("الوجهة")
-            c1,c2 = st.columns(2)
-            d1 = c1.date_input("ذهاب")
-            d2 = c2.date_input("عودة")
-            rsn = st.text_area("الهدف")
-            if st.form_submit_button("إرسال"): submit("رحلة عمل", dst, rsn, 0, (d2-d1).days, file_name, d1, d2)
+            ds=st.text_input("وجهة"); c1,c2=st.columns(2); d1=c1.date_input("ذهاب"); d2=c2.date_input("عودة"); r=st.text_area("هدف")
+            if st.form_submit_button("إرسال"): sub("رحلة عمل",ds,r,0,(d2-d1).days,fname,d1,d2)
 
-def submit(srv, sub, det, amt, days, fname, sd="-", ed="-", tm="-"):
-    user = st.session_state['user']
-    # وقت الطلب أوتوماتيك
-    req_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    row = [
-        int(time.time()), req_time, user['رقم الموظف'], user['اسم الموظف'], 
-        user['الهيكل الإداري'], srv, sub, det, amt, days, str(sd), str(ed), str(tm), 
-        "تحت المراجعة", "-", "-", "-", fname, "جاري التحليل..."
-    ]
-    if save_to_sheet(row):
-        st.balloons()
-        st.success("✅ تم إرسال الطلب والمرفقات!")
-        time.sleep(1.5)
-        st.session_state['page'] = 'dashboard'
-        st.rerun()
-    else:
-        st.error("فشل الحفظ، تأكد من تحديث الأعمدة من القائمة الجانبية.")
+def sub(s,sub,det,a,d,fn,sd="-",ed="-",tm="-"):
+    u=st.session_state['user']
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    data = {
+        "رقم_الطلب": int(time.time()), "وقت_الطلب": ts, "رقم_الموظف": u['رقم الموظف'],
+        "اسم_الموظف": u['اسم الموظف'], "القسم": u['الهيكل الإداري'], "نوع_الخدمة": s,
+        "التفاصيل": sub, "شرح_الطلب": det, "المبلغ": a, "الأيام": d,
+        "تاريخ_البداية": str(sd), "تاريخ_النهاية": str(ed), "وقت_الاستئذان": str(tm),
+        "حالة_الطلب": "تحت المراجعة", "رد_المدير": "-", "وقت_الرد": "-", 
+        "مدة_الإجراء_ساعة": "-", "المرفقات": fn, "توصية_AI": "تحليل..."
+    }
+    if save_to_sheet(data):
+        st.balloons(); st.success("✅ تم الإرسال!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+    else: st.error("خطأ في الحفظ!")
 
-# --- 7. الموجه الرئيسي ---
-if st.session_state['page'] == 'login':
-    login_page()
-elif st.session_state['page'] == 'dashboard':
-    dashboard_page()
-elif st.session_state['page'] == 'form':
-    form_page()
-elif st.session_state['page'] == 'approvals':
-    approvals_page()
-elif st.session_state['page'] == 'my_requests':
-    my_requests_page()
+# --- 7. الموجه ---
+if st.session_state['page'] == 'login': login_page()
+elif st.session_state['page'] == 'dashboard': dashboard_page()
+elif st.session_state['page'] == 'form': form_page()
+elif st.session_state['page'] == 'approvals': approvals_page()
+elif st.session_state['page'] == 'my_requests': my_requests_page()
