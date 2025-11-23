@@ -67,6 +67,7 @@ def get_requests_for_role(role, uid, dept):
 
     # 2. مهام المدير
     if role == "Manager":
+        # المدير يرى طلبات قسمه
         mgr_reqs = supabase.table("requests").select("*").eq("dept", dept).eq("status_manager", "Pending").execute().data
         for r in mgr_reqs:
             # شرط: البديل وافق أو لا يوجد بديل
@@ -85,6 +86,7 @@ def get_requests_for_role(role, uid, dept):
 
 def update_status_db(req_id, field, status, note, user_name):
     if not supabase: return
+    # هنا كان الخطأ سابقاً، الآن الأعمدة موجودة في Supabase
     data = {
         field: status,
         f"{field.replace('status_', '')}_note": note,
@@ -117,7 +119,6 @@ def dashboard_page():
     u = st.session_state['user']
     st.title(f"👋 مرحباً، {u['name']}")
     
-    # عداد المهام
     tasks = get_requests_for_role(u['role'], u['emp_id'], u['dept'])
     if tasks: st.warning(f"🔔 لديك ({len(tasks)}) مهام معلقة.")
 
@@ -126,10 +127,16 @@ def dashboard_page():
     with c1:
         st.markdown('<div class="service-card"><h3>🌴 الإجازات</h3></div>', unsafe_allow_html=True)
         if st.button("تقديم طلب إجازة"): nav("leave")
+        st.markdown('<div class="service-card"><h3>🛒 المشتريات</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب شراء"): nav("purchase")
     with c2:
         st.markdown('<div class="service-card"><h3>💰 السلف المالية</h3></div>', unsafe_allow_html=True)
         if st.button("تقديم طلب سلفة"): nav("loan")
+        st.markdown('<div class="service-card"><h3>✈️ رحلات العمل</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب انتداب"): nav("travel")
     with c3:
+        st.markdown('<div class="service-card"><h3>⏱️ الاستئذان</h3></div>', unsafe_allow_html=True)
+        if st.button("تسجيل استئذان"): nav("perm")
         st.markdown('<div class="service-card"><h3>📂 ملفي والطلبات</h3></div>', unsafe_allow_html=True)
         if st.button("سجل المعاملات"): st.session_state['page']='my_requests'; st.rerun()
 
@@ -141,6 +148,7 @@ def form_page():
     if st.button("🔙 إلغاء"): st.session_state['page']='dashboard'; st.rerun()
     st.write("---")
     
+    # --- 1. الإجازات ---
     if svc == 'leave':
         st.header("🌴 طلب إجازة")
         
@@ -176,7 +184,7 @@ def form_page():
                 sub_name = sub_user['name']
             else: st.warning("⚠️ الرقم غير صحيح")
 
-        st.warning("**(( إقــرار ))**\nأقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد... ولن أتجاوز المدة إلا عند إرسال **خطاب** لتمديد الإجازة...")
+        st.warning("**(( إقــرار ))**\nأقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد... ولن أتجاوز المدة إلا عند إرسال **خطاب** لتمديد الإجازة والموافقة عليها...")
         agree = st.checkbox("✅ أوافق")
         
         if st.button("🚀 إرسال", type="primary"):
@@ -193,12 +201,48 @@ def form_page():
                 if submit_request_db(data):
                     st.success("تم الإرسال!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
 
+    # --- 2. السلف ---
     elif svc == 'loan':
         st.header("💰 طلب سلفة")
-        amt = st.number_input("المبلغ", 500); rsn = st.text_area("السبب")
+        amt = st.number_input("المبلغ المطلوب", 500)
+        rsn = st.text_area("الغرض")
         if st.button("إرسال"): 
-            submit_request_db({"emp_id": u['emp_id'], "service_type": "سلفة", "amount": amt, "details": rsn})
+            submit_request_db({"emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'], "service_type": "سلفة", "amount": amt, "details": rsn})
             st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+
+    # --- 3. المشتريات ---
+    elif svc == 'purchase':
+        st.header("🛒 طلب شراء")
+        item = st.text_input("الصنف")
+        rsn = st.text_area("السبب")
+        if st.button("إرسال"): 
+            submit_request_db({"emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'], "service_type": "مشتريات", "details": f"{item} - {rsn}"})
+            st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+
+    # --- 4. الاستئذان ---
+    elif svc == 'perm':
+        st.header("⏱️ استئذان")
+        d = st.date_input("التاريخ")
+        tm = st.time_input("الوقت")
+        rsn = st.text_area("السبب")
+        if st.button("إرسال"): 
+            submit_request_db({"emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'], "service_type": "استئذان", "start_date": str(d), "details": f"{tm} - {rsn}"})
+            st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+
+    # --- 5. الانتداب (Travel) ---
+    elif svc == 'travel':
+        st.header("✈️ رحلة عمل / انتداب")
+        dst = st.text_input("الوجهة")
+        c1, c2 = st.columns(2)
+        d1 = c1.date_input("ذهاب"); d2 = c2.date_input("عودة")
+        rsn = st.text_area("الهدف من الزيارة")
+        if st.button("إرسال"):
+             submit_request_db({
+                 "emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'],
+                 "service_type": "انتداب", "details": f"إلى {dst} - {rsn}",
+                 "start_date": str(d1), "end_date": str(d2), "days": (d2-d1).days + 1
+             })
+             st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
 
 def approvals_page():
     u = st.session_state['user']
@@ -232,6 +276,7 @@ def my_requests_page():
     if st.button("🔙 عودة"): st.session_state['page']='dashboard'; st.rerun()
     
     u = st.session_state['user']
+    if not supabase: return
     reqs = supabase.table("requests").select("*").eq("emp_id", u['emp_id']).order("created_at", desc=True).execute().data
     
     if not reqs: st.info("السجل فارغ."); return
@@ -269,4 +314,3 @@ elif st.session_state['page'] == 'dashboard': dashboard_page()
 elif st.session_state['page'] == 'form': form_page()
 elif st.session_state['page'] == 'approvals': approvals_page()
 elif st.session_state['page'] == 'my_requests': my_requests_page()
-
