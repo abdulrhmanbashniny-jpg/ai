@@ -4,6 +4,18 @@ import pandas as pd
 from datetime import datetime
 import time
 import urllib.parse
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas as pdf_canvas
+from reportlab.lib.units import cm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+# تسجيل خط عربي
+try:
+    pdfmetrics.registerFont(TTFont('Arabic', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+except:
+    pass
 
 # --- 1. إعدادات الصفحة ---
 st.set_page_config(page_title="HR Enterprise System", layout="wide", page_icon="🏢")
@@ -19,11 +31,9 @@ st.markdown("""
     h1, h2, h3 { font-family: 'Segoe UI', sans-serif; color: #2c3e50; }
     .stButton>button { width: 100%; border-radius: 8px; height: 45px; font-weight: 600; }
     
-    /* شريط التتبع */
     .step { display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 0.9em; margin: 5px; }
     .step-done { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
     .step-wait { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
-    .step-now { background: #cce5ff; color: #004085; border: 1px solid #b8daff; font-weight:bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -86,13 +96,16 @@ def get_requests_for_role(role, uid, dept):
 def update_status_db(req_id, field, status, note, user_name):
     if not supabase: return
     
-    # تحديد الأعمدة بدقة
     note_col = ""
     if field == "status_substitute": note_col = "substitute_note"
     elif field == "status_manager": note_col = "manager_note"
     elif field == "status_hr": note_col = "hr_note"
     
-    data = { field: status, note_col: note }
+    data = { 
+        field: status, 
+        note_col: note,
+        f"{field.replace('status_', '')}_action_at": datetime.now().isoformat()
+    }
     
     if field == "status_hr" and status == "Approved":
         data["final_status"] = "Approved"
@@ -100,6 +113,83 @@ def update_status_db(req_id, field, status, note, user_name):
         data["final_status"] = "Rejected"
         
     supabase.table("requests").update(data).eq("id", req_id).execute()
+
+def generate_pdf(r, approver_name=""):
+    """توليد PDF للنموذج مع التوقيعات"""
+    buffer = BytesIO()
+    c = pdf_canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    
+    # العنوان
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(width/2, height - 1*cm, "LEAVE REQUEST FORM")
+    c.drawCentredString(width/2, height - 1.5*cm, "نموذج طلب إجازة")
+    
+    # الخط الفاصل
+    c.line(1*cm, height - 1.8*cm, width - 1*cm, height - 1.8*cm)
+    
+    # المعلومات
+    y_pos = height - 2.5*cm
+    c.setFont("Helvetica", 10)
+    
+    c.drawString(1*cm, y_pos, f"Employee Name: {r['emp_name']}")
+    y_pos -= 0.5*cm
+    c.drawString(1*cm, y_pos, f"Employee ID: {r['emp_id']}")
+    y_pos -= 0.5*cm
+    c.drawString(1*cm, y_pos, f"Department: {r['dept']}")
+    y_pos -= 0.5*cm
+    c.drawString(1*cm, y_pos, f"Position: {r.get('job_title', '-')}")
+    y_pos -= 0.5*cm
+    c.drawString(1*cm, y_pos, f"Leave Type: {r.get('sub_type', '-')}")
+    y_pos -= 0.5*cm
+    c.drawString(1*cm, y_pos, f"Duration: {r.get('days')} days")
+    y_pos -= 0.5*cm
+    c.drawString(1*cm, y_pos, f"From: {r.get('start_date')} To: {r.get('end_date')}")
+    y_pos -= 0.5*cm
+    c.drawString(1*cm, y_pos, f"Substitute: {r.get('substitute_name', 'N/A')}")
+    
+    # الإقرار الكامل
+    y_pos -= 1*cm
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(1*cm, y_pos, "DECLARATION / الاقرار:")
+    y_pos -= 0.5*cm
+    
+    declaration_text = """أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه كما أني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال 
+خطاب رسمي لتمديد الإجازة والموافقة عليها خطياً من قبل رئيسي المباشر. كما أعتبر نفسي منذراً بالفصل النهائي عند تجاوز 
+مدة الغياب حسب المدة المحددة في نظام العمل والعمال، وذلك دون الحاجة لإنذاري رسمياً على عنواني في بلدي. وأنني سأقوم 
+بإجازتي في التاريخ المبين أعلاه، وبذلك ألتزم وعلى ذلك أوقع إلكترونياً."""
+    
+    c.setFont("Helvetica", 8)
+    for line in declaration_text.split('\n'):
+        c.drawString(1*cm, y_pos, line.strip())
+        y_pos -= 0.4*cm
+    
+    # التواقيع
+    y_pos -= 0.5*cm
+    c.line(1*cm, y_pos, width - 1*cm, y_pos)
+    y_pos -= 0.8*cm
+    
+    # توقيع الموظف
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(1*cm, y_pos, "Employee Signature")
+    c.drawString(1*cm, y_pos - 0.3*cm, f"توقيع الموظف: {r['emp_name']}")
+    c.drawString(1*cm, y_pos - 0.6*cm, f"Date / التاريخ: {datetime.now().strftime('%Y-%m-%d')}")
+    
+    # توقيع المدير
+    c.drawString(width/2, y_pos, "Manager Approval")
+    c.drawString(width/2, y_pos - 0.3*cm, f"توقيع المدير")
+    c.drawString(width/2, y_pos - 0.6*cm, f"Date / التاريخ: {r.get('manager_action_at', 'Pending')[:10]}")
+    
+    # توقيع HR
+    if r.get('final_status') == 'Approved':
+        y_pos -= 1.2*cm
+        c.drawString(1*cm, y_pos, "HR Approval")
+        c.drawString(1*cm, y_pos - 0.3*cm, f"توقيع الموارد البشرية: {approver_name}")
+        c.drawString(1*cm, y_pos - 0.6*cm, f"Date / التاريخ: {r.get('hr_action_at', 'Pending')[:10]}")
+    
+    c.save()
+    buffer.seek(0)
+    return buffer
 
 # --- 4. الصفحات ---
 def login_page():
@@ -177,8 +267,16 @@ def form_page():
                 sub_name = sub_user['name']
             else: st.warning("⚠️ الرقم غير صحيح")
 
-        st.warning("**(( إقــرار ))**\nأقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد... ولن أتجاوز المدة إلا عند إرسال **خطاب** لتمديد الإجازة والموافقة عليها...")
-        agree = st.checkbox("✅ أوافق")
+        st.markdown("""
+        <div style="background:#fffbf2; border:1px solid #f0e6ce; padding:15px; border-radius:8px; color:#5a4a2d; font-size:0.95em; line-height:1.6; text-align:justify;">
+        <strong>(( إقــرار وتعهــد ))</strong><br>
+        أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه، كما أنني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال <strong>خطاب رسمي</strong> لتمديد الإجازة والموافقة عليها خطياً من قبل رئيسي المباشر. 
+        كما أعتبر نفسي منذراً بالفصل النهائي عند تجاوز مدة الغياب حسب المدة المحددة في نظام العمل والعمال، وذلك دون الحاجة لإنذاري رسمياً على عنواني في بلدي. 
+        وأنني سأقوم بإجازتي في التاريخ المبين أعلاه، وبذلك ألتزم وعلى ذلك أوقع إلكترونياً.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        agree = st.checkbox("✅ أوافق وألتزم بما ورد في الإقرار أعلاه")
         
         if st.button("🚀 إرسال", type="primary"):
             if days > 0 and agree:
@@ -194,7 +292,6 @@ def form_page():
                 if submit_request_db(data):
                     st.success("تم الإرسال!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
 
-    # --- باقي الخدمات (مختصرة) ---
     elif svc == 'loan':
         st.header("💰 طلب سلفة")
         amt = st.number_input("المبلغ", 500); rsn = st.text_area("الغرض")
@@ -204,49 +301,55 @@ def form_page():
 
 def approvals_page():
     u = st.session_state['user']
-    st.title("✅ اعتماد الطلبات")
+    st.title("✅ المهام والموافقات")
     
     tasks = get_requests_for_role(u['role'], u['emp_id'], u['dept'])
     if not tasks: st.success("🎉 لا توجد مهام."); return
     
     for r in tasks:
         task_type = r.get('task_type', 'Manager')
-        label = "موافقة بديل" if task_type=='Substitute' else "مدير" if task_type=='Manager' else "HR"
+        label = "موافقة بديل" if task_type=='Substitute' else "موافقة مدير" if task_type=='Manager' else "موافقة HR"
         
         with st.expander(f"[{label}] {r['service_type']} - {r['emp_name']}", expanded=True):
-            st.write(f"**التفاصيل:** {r.get('sub_type','-')} ({r.get('days','-')} أيام)")
-            if task_type == 'Substitute': st.info("⚠️ هذا الزميل اختارك بديلاً له.")
+            col1, col2 = st.columns([2, 1])
             
-            note = st.text_input("ملاحظة", key=f"n_{r['id']}")
-            c1, c2 = st.columns(2)
+            with col1:
+                st.write(f"**نوع الطلب:** {r.get('sub_type','-')}")
+                st.write(f"**المدة:** {r.get('days','-')} أيام (من {r.get('start_date')} إلى {r.get('end_date')})")
+                if task_type == 'Substitute': 
+                    st.warning("⚠️ هذا الزميل اختارك بديلاً له. يرجى التأكيد من توفرك.")
             
-            field = "status_substitute" if task_type=='Substitute' else "status_manager" if task_type=='Manager' else "status_hr"
-            
-            if c1.button("✅ موافقة واعتماد", key=f"ok_{r['id']}"):
-                update_status_db(r['id'], field, "Approved", note, u['name'])
-                st.success("تم الاعتماد!")
+            with col2:
+                note = st.text_input("ملاحظات", key=f"n_{r['id']}", placeholder="اختياري")
                 
-                # زر الواتساب (يظهر للـ HR فقط)
-                if task_type == 'HR':
-                    phone = r.get('phone', '').replace('0', '966', 1)
-                    msg = f"عزيزي {r['emp_name']}، تم اعتماد إجازتك ({r.get('sub_type')}) لمدة {r.get('days')} أيام.\nإجازة سعيدة!"
-                    wa_link = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
-                    st.markdown(f"""
-                    <a href="{wa_link}" target="_blank">
-                        <button style="background-color:#25D366; color:white; border:none; padding:10px 20px; border-radius:5px; cursor:pointer; font-weight:bold;">
-                        📲 إرسال إشعار واتساب للموظف
-                        </button>
-                    </a>
-                    """, unsafe_allow_html=True)
-                else:
+                c_ok, c_no = st.columns(2)
+                field = "status_substitute" if task_type=='Substitute' else "status_manager" if task_type=='Manager' else "status_hr"
+                
+                if c_ok.button("✅ موافقة", key=f"ok_{r['id']}"):
+                    update_status_db(r['id'], field, "Approved", note, u['name'])
+                    st.success("✅ تم الاعتماد!")
+                    
+                    # إذا كانت موافقة HR النهائية، أظهر زر الواتساب
+                    if task_type == 'HR':
+                        phone = r.get('phone', '').replace('0', '966', 1)
+                        msg = f"السلام عليكم {r['emp_name']}،\n\n✅ تم اعتماد إجازتك\n📅 النوع: {r.get('sub_type')}\n⏳ المدة: {r.get('days')} أيام\n📆 من {r.get('start_date')} إلى {r.get('end_date')}\n\nإجازة موفقة!"
+                        wa_link = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
+                        st.markdown(f"""
+                        <a href="{wa_link}" target="_blank" style="text-decoration:none;">
+                            <button style="background-color:#25D366; color:white; border:none; padding:12px 20px; border-radius:8px; cursor:pointer; font-weight:bold; width:100%; margin-top:10px;">
+                            📲 إرسال إشعار واتساب للموظف
+                            </button>
+                        </a>
+                        """, unsafe_allow_html=True)
+                    else:
+                        time.sleep(1); st.rerun()
+                
+                if c_no.button("❌ رفض", key=f"no_{r['id']}"):
+                    update_status_db(r['id'], field, "Rejected", note, u['name'])
                     st.rerun()
 
-            if c2.button("❌ رفض", key=f"no_{r['id']}"):
-                update_status_db(r['id'], field, "Rejected", note, u['name'])
-                st.rerun()
-
 def my_requests_page():
-    st.title("📂 تتبع معاملاتي")
+    st.title("📂 سجل معاملاتي")
     if st.button("🔙 عودة"): st.session_state['page']='dashboard'; st.rerun()
     
     u = st.session_state['user']
@@ -262,51 +365,29 @@ def my_requests_page():
             s_sub = "step-done" if r.get('status_substitute') in ['Approved','Not Required'] else "step-wait"
             s_mgr = "step-done" if r['status_manager']=='Approved' else "step-wait"
             s_hr = "step-done" if r['status_hr']=='Approved' else "step-wait"
-            final = r.get('final_status', 'Under Review')
+            final = r.get('final_status', 'تحت الإجراء')
             
             st.markdown(f"""
             <span class="{s_sub}">1. البديل</span> ➡️ 
             <span class="{s_mgr}">2. المدير</span> ➡️ 
             <span class="{s_hr}">3. HR</span> ➡️ 
-            <span class="step-now">{final}</span>
+            <span style="display:inline-block; padding:5px 15px; border-radius:20px; font-weight:bold; background:#cce5ff; color:#004085;">{final}</span>
             """, unsafe_allow_html=True)
             
-            # زر الطباعة (يظهر فقط عند الموافقة النهائية)
+            # زر تحميل PDF (يظهر فقط عند الموافقة النهائية)
             if final == 'Approved':
-                if st.button("🖨️ طباعة النموذج", key=f"pr_{r['id']}"):
-                    print_view(r)
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    pdf_buffer = generate_pdf(r, r.get('hr_note', 'N/A'))
+                    st.download_button(
+                        label="📥 تحميل PDF",
+                        data=pdf_buffer,
+                        file_name=f"Leave_Request_{r['emp_id']}_{r['created_at'][:10]}.pdf",
+                        mime="application/pdf",
+                        key=f"pdf_{r['id']}"
+                    )
             
             st.divider()
-
-def print_view(r):
-    st.markdown(f"""
-    <div style="border:2px solid black; padding:30px; background:white; color:black; font-family:Arial; direction:rtl; text-align:right;">
-        <h2 style="text-align:center;">نموذج إجازة / مغادرة</h2>
-        <hr>
-        <table style="width:100%; border-collapse:collapse;" border="1">
-            <tr><td style="padding:8px;background:#f0f0f0;">الاسم</td><td style="padding:8px;">{r['emp_name']}</td><td style="padding:8px;background:#f0f0f0;">الرقم</td><td style="padding:8px;">{r['emp_id']}</td></tr>
-            <tr><td style="padding:8px;background:#f0f0f0;">القسم</td><td style="padding:8px;">{r['dept']}</td><td style="padding:8px;background:#f0f0f0;">الوظيفة</td><td style="padding:8px;">{r.get('job_title','-')}</td></tr>
-        </table>
-        <br>
-        <h3>بيانات الطلب:</h3>
-        <p><strong>نوع الإجازة:</strong> {r.get('sub_type')}</p>
-        <p><strong>المدة:</strong> {r.get('days')} أيام (من {r.get('start_date')} إلى {r.get('end_date')})</p>
-        <p><strong>الموظف البديل:</strong> {r.get('substitute_name') or 'لا يوجد'}</p>
-        <br>
-        <div style="border:1px dashed black; padding:10px; font-size:0.9em;">
-            <strong>الإقــرار:</strong><br>
-            أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد... (تمت الموافقة الإلكترونية بتاريخ {r['created_at'][:10]})
-        </div>
-        <br><br>
-        <table style="width:100%; text-align:center;">
-            <tr>
-                <td><strong>المدير المباشر</strong><br>✅ معتمد<br>{r.get('manager_note','')}</td>
-                <td><strong>الموارد البشرية</strong><br>✅ معتمد<br>{r.get('hr_note','')}</td>
-            </tr>
-        </table>
-    </div>
-    """, unsafe_allow_html=True)
-    st.button("إغلاق الطباعة", key="close_pr")
 
 # --- 5. التوجيه الرئيسي ---
 if 'user' not in st.session_state: st.session_state['user'] = None
@@ -315,8 +396,9 @@ if 'page' not in st.session_state: st.session_state['page'] = 'login'
 if st.session_state['user']:
     with st.sidebar:
         st.header(st.session_state['user']['name'])
+        st.caption(f"الدور: {st.session_state['user']['role']}")
         if st.button("🏠 الرئيسية"): st.session_state['page']='dashboard'; st.rerun()
-        if st.button("✅ المهام"): st.session_state['page']='approvals'; st.rerun()
+        if st.button("✅ المهام والموافقات"): st.session_state['page']='approvals'; st.rerun()
         if st.button("🚪 خروج"): st.session_state.clear(); st.rerun()
 
 if st.session_state['page'] == 'login': login_page()
