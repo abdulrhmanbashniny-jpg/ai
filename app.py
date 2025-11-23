@@ -19,8 +19,6 @@ st.markdown("""
         transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); border-color: #2196f3;
     }
     .stButton>button { width: 100%; border-radius: 8px; height: 45px; font-weight: bold; }
-    /* تحسين الجدول */
-    .stDataFrame { border-radius: 10px; overflow: hidden; border: 1px solid #eee; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -97,7 +95,6 @@ def update_status(req_id, status, note, mgr_name):
             r = cell.row
             hdrs = ws.row_values(1)
             
-            # دوال مساعدة لتحديث الخلية حسب اسم العمود
             def upd(col_name, val):
                 if col_name in hdrs:
                     ws.update_cell(r, hdrs.index(col_name)+1, val)
@@ -134,16 +131,13 @@ def login_page():
             pwd = st.text_input("كلمة المرور", type="password")
             is_mgr = st.checkbox("دخول كمدير / مسؤول")
             if st.form_submit_button("دخول"):
-                # منطق الدخول المحسن
                 role = "Manager" if is_mgr else "Employee"
-                dept = "المشتريات"  # افتراضي للتجربة، في النظام الحقيقي يجلب من ملف الموظفين
-                
-                # للتجربة: إذا دخل بصفة مدير، سنعتبره "مدير عام" يرى كل الأقسام مؤقتاً
-                # لحل مشكلة عدم ظهور الطلبات
+                dept = "المشتريات" 
+                # توحيد اسم المفاتيح: 'اسم الموظف' (بمسافة)
                 st.session_state['user'] = {
                     'رقم الموظف': uid,
-                    'اسم الموظف': f"المستخدم {uid}",
-                    'الهيكل الإداري': dept, # هذا القسم المسجل له
+                    'اسم الموظف': f"المستخدم {uid}", 
+                    'الهيكل الإداري': dept,
                     'الصلاحية': role
                 }
                 st.session_state['page'] = 'dashboard'
@@ -195,22 +189,15 @@ def approvals_page():
         st.info("لا توجد طلبات مسجلة في النظام.")
         return
 
-    # --- تصحيح الفلترة: عرض كل الطلبات "تحت المراجعة" للمدير للتأكد ---
-    # (يمكنك لاحقاً إعادة تفعيل فلتر القسم if row['القسم'] == user_dept)
     pending = df[df['حالة_الطلب'] == 'تحت المراجعة']
     
     if pending.empty:
-        st.success("🎉 لا توجد طلبات معلقة (الكل تم الرد عليه).")
-        # عرض سجل سريع لآخر الطلبات المعتمدة للتأكد
-        st.markdown("---")
-        st.caption("آخر الطلبات التي تمت معالجتها:")
-        st.dataframe(df.tail(5))
+        st.success("🎉 لا توجد طلبات معلقة.")
         return
 
     st.write(f"يوجد ({len(pending)}) طلبات تنتظر الاعتماد:")
     
     for i, row in pending.iterrows():
-        # عنوان البطاقة
         card_title = f"#{row['رقم_الطلب']} | {row['اسم_الموظف']} | {row['نوع_الخدمة']}"
         
         with st.expander(card_title, expanded=True):
@@ -219,26 +206,24 @@ def approvals_page():
                 st.markdown(f"**القسم:** {row['القسم']}")
                 st.markdown(f"**التفاصيل:** {row['شرح_الطلب']}")
                 st.markdown(f"**الوقت:** {row['وقت_الطلب']}")
-                
-                # عرض المرفقات إن وجدت
                 if 'المرفقات' in row and str(row['المرفقات']).strip() != "":
                     st.info(f"📎 مرفق: {row['المرفقات']}")
-                
-                # عرض المبالغ/الأيام إن وجدت
                 if int(row.get('المبلغ', 0) or 0) > 0: st.write(f"💰 المبلغ: {row['المبلغ']}")
-                if int(row.get('الأيام', 0) or 0) > 0: st.write(f"📅 المدة: {row['الأيام']} يوم")
 
             with c2:
                 st.markdown("### قرارك:")
                 note = st.text_input("ملاحظة", key=f"n_{row['رقم_الطلب']}")
                 col_ok, col_no = st.columns(2)
                 
+                # التصحيح هنا: نستخدم المفتاح الصحيح 'اسم الموظف'
+                mgr_name = st.session_state['user']['اسم الموظف']
+                
                 if col_ok.button("✅ اعتماد", key=f"ok_{row['رقم_الطلب']}"):
-                    if update_status(row['رقم_الطلب'], "مقبول", note, st.session_state['user']['اسم_الموظف']):
+                    if update_status(row['رقم_الطلب'], "مقبول", note, mgr_name):
                         st.success("تم!"); time.sleep(1); st.rerun()
                         
                 if col_no.button("❌ رفض", key=f"no_{row['رقم_الطلب']}"):
-                    if update_status(row['رقم_الطلب'], "مرفوض", note, st.session_state['user']['اسم_الموظف']):
+                    if update_status(row['رقم_الطلب'], "مرفوض", note, mgr_name):
                         st.error("رفض!"); time.sleep(1); st.rerun()
 
 def my_requests_page():
@@ -246,11 +231,9 @@ def my_requests_page():
     if st.button("🔙 عودة"): st.session_state['page']='dashboard'; st.rerun()
     df = get_all_requests()
     if not df.empty:
-        # فلترة برقم الموظف الحالي
         uid = str(st.session_state['user']['رقم الموظف'])
         my_df = df[df['رقم_الموظف'].astype(str) == uid]
         if not my_df.empty:
-            # تنسيق الجدول للعرض
             cols = ['رقم_الطلب', 'نوع_الخدمة', 'حالة_الطلب', 'رد_المدير', 'وقت_الرد']
             final_cols = [c for c in cols if c in my_df.columns]
             st.dataframe(my_df[final_cols], use_container_width=True, hide_index=True)
@@ -262,7 +245,6 @@ def form_page():
     if st.button("🔙 إلغاء"): st.session_state['page']='dashboard'; st.rerun()
     st.write("---")
     
-    # رفع الملفات
     up_file = st.file_uploader("📎 مرفقات (صورة/PDF)", type=['png','jpg','pdf'])
     fname = up_file.name if up_file else ""
 
@@ -300,6 +282,7 @@ def form_page():
 def sub(s,sub,det,a,d,fn,sd="-",ed="-",tm="-"):
     u=st.session_state['user']
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # توحيد المفاتيح: 'اسم الموظف' (بمسافة)
     data = {
         "رقم_الطلب": int(time.time()), "وقت_الطلب": ts, "رقم_الموظف": u['رقم الموظف'],
         "اسم_الموظف": u['اسم الموظف'], "القسم": u['الهيكل الإداري'], "نوع_الخدمة": s,
