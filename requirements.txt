@@ -4,4 +4,4 @@ openpyxl
 pandas
 gspread
 oauth2client
-
+supabase
