@@ -127,4 +127,164 @@ def form_page():
         st.divider()
         
         # 2. نوع الإجازة
-        l_type = st.selectbox("ن
+        l_type = st.selectbox("نوع الإجازة", ["سنوية (Yearly)", "مرضية (Sick)", "اضطرارية (Emergency)"])
+        
+        # 3. التواريخ (تفاعلية)
+        col_d1, col_d2 = st.columns(2)
+        start_d = col_d1.date_input("تاريخ البداية", datetime.today())
+        end_d = col_d2.date_input("تاريخ النهاية", datetime.today())
+        
+        # حساب تلقائي للأيام (يتحدث فوراً عند تغيير التاريخ)
+        if end_d >= start_d:
+            days_diff = (end_d - start_d).days + 1
+            st.success(f"📅 **مدة الإجازة: {days_diff} يوم**")
+        else:
+            days_diff = 0
+            st.error("⚠️ تاريخ النهاية يجب أن يكون بعد البداية أو يساويها.")
+        
+        # 4. الموظف البديل (إدخال يدوي لرقم الموظف)
+        st.write("### الموظف البديل (اختياري)")
+        sub_id = st.text_input("أدخل رقم الموظف الوظيفي للبديل (مثال: 1012)")
+        sub_name = None
+        
+        if sub_id and sub_id.strip():
+            # التحقق من وجود الموظف
+            sub_user = get_user_data(sub_id.strip())
+            if sub_user:
+                st.info(f"✅ الموظف البديل: **{sub_user['name']}** ({sub_user['job_title']})")
+                sub_name = sub_user['name']
+            else:
+                st.warning("⚠️ رقم الموظف غير موجود في النظام.")
+                sub_id = None
+        
+        # 5. السبب
+        reason = st.text_area("سبب الإجازة")
+        
+        # 6. الإقرار (المحدث)
+        st.warning("""
+        **(( إقــرار ))**
+        
+أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه كما أني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال **خطاب** لتمديد الإجازة والموافقة عليها من قبل رئيسي كما أعتبر نفسي منذراً بالفصل عند تجاوز مدة الغياب حسب المدة المحددة من نظام العمل والعمال وذلك دون الحاجه لإنذاري على عنواني في بلدي وأنني سأقوم بإجازتي في التاريخ المبين أعلاه وبذلك سألتزم وعلى ذلك أوقع.
+        """)
+        agree = st.checkbox("✅ أوافق وألتزم بما ورد في الإقرار أعلاه")
+        
+        # 7. زر الإرسال
+        if st.button("🚀 إرسال الطلب", type="primary"):
+            if not agree:
+                st.error("❌ يجب الموافقة على الإقرار لإرسال الطلب.")
+            elif days_diff <= 0:
+                st.error("❌ تاريخ النهاية يجب أن يكون صحيحاً.")
+            else:
+                data = {
+                    "emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'],
+                    "job_title": u['job_title'], "phone": u['phone'], "nationality": u['nationality'],
+                    "service_type": "إجازة", "sub_type": l_type, "details": reason,
+                    "start_date": str(start_d), "end_date": str(end_d), "days": days_diff,
+                    "substitute_id": sub_id if sub_id else None,
+                    "substitute_name": sub_name,
+                    "status_substitute": "Pending" if sub_id else "Not Required",
+                    "declaration_agreed": True
+                }
+                if submit_request_db(data):
+                    st.balloons()
+                    st.success("✅ تم إرسال الطلب بنجاح!")
+                    time.sleep(2)
+                    st.session_state['page']='dashboard'
+                    st.rerun()
+
+def approvals_page():
+    u = st.session_state['user']
+    st.title("✅ اعتماد الطلبات")
+    
+    reqs = get_requests_for_role(u['role'], u['emp_id'], u['dept'])
+    if not reqs:
+        st.success("🎉 لا توجد مهام معلقة.")
+        return
+    
+    for r in reqs:
+        with st.expander(f"{r['service_type']} | {r['emp_name']} ({r['days']} أيام)", expanded=True):
+            c1, c2 = st.columns([2,1])
+            with c1:
+                st.write(f"**النوع:** {r['sub_type']}")
+                st.write(f"**التاريخ:** من {r['start_date']} إلى {r['end_date']}")
+                if r['substitute_name']:
+                    st.info(f"👤 بديل: {r['substitute_name']} (رقم: {r['substitute_id']})")
+                st.caption(f"السبب: {r['details']}")
+            with c2:
+                note = st.text_input("ملاحظة", key=f"n_{r['id']}")
+                if st.button("✅ موافقة", key=f"ok_{r['id']}"):
+                    field = "status_manager" if u['role']=="Manager" else "status_hr"
+                    update_status_db(r['id'], field, "Approved", note, u['name'])
+                    st.rerun()
+                if st.button("❌ رفض", key=f"no_{r['id']}"):
+                    field = "status_manager" if u['role']=="Manager" else "status_hr"
+                    update_status_db(r['id'], field, "Rejected", note, u['name'])
+                    st.rerun()
+
+def my_requests_page():
+    st.title("📂 طلباتي وسجل الطباعة")
+    if st.button("🔙 عودة"): st.session_state['page']='dashboard'; st.rerun()
+    
+    u = st.session_state['user']
+    reqs = supabase.table("requests").select("*").eq("emp_id", u['emp_id']).order("created_at", desc=True).execute().data
+    
+    if not reqs:
+        st.info("لا توجد طلبات.")
+        return
+    
+    for r in reqs:
+        with st.container():
+            col_stat, col_info, col_print = st.columns([1, 3, 1])
+            
+            status = r['final_status']
+            color = "green" if status=="Approved" else "orange" if status=="Under Review" else "red"
+            col_stat.markdown(f"<h3 style='color:{color}'>{status}</h3>", unsafe_allow_html=True)
+            
+            with col_info:
+                st.write(f"**{r['service_type']} ({r['sub_type']})** - {r['days']} أيام")
+                st.caption(f"بتاريخ: {r['created_at'][:10]}")
+            
+            with col_print:
+                if status == "Approved":
+                    if st.button("🖨️ طباعة", key=f"pr_{r['id']}"):
+                        print_view(r)
+
+def print_view(r):
+    st.markdown(f"""
+    <div style="background:white; padding:40px; border:2px solid black; color:black; font-family:Times New Roman;">
+        <h2 style="text-align:center; text-decoration:underline;">نموذج طلب إجازة</h2>
+        <table style="width:100%; text-align:right; direction:rtl; border-collapse:collapse;" border="1">
+            <tr><td style="padding:10px; background:#eee;">اسم الموظف</td><td style="padding:10px;">{r['emp_name']}</td></tr>
+            <tr><td style="padding:10px; background:#eee;">الرقم الوظيفي</td><td style="padding:10px;">{r['emp_id']}</td></tr>
+            <tr><td style="padding:10px; background:#eee;">القسم</td><td style="padding:10px;">{r['dept']}</td></tr>
+            <tr><td style="padding:10px; background:#eee;">الوظيفة</td><td style="padding:10px;">{r['job_title']}</td></tr>
+        </table>
+        <br>
+        <h3>تفاصيل الإجازة:</h3>
+        <p><strong>النوع:</strong> {r['sub_type']}</p>
+        <p><strong>المدة:</strong> {r['days']} أيام (من {r['start_date']} إلى {r['end_date']})</p>
+        <p><strong>الموظف البديل:</strong> {r['substitute_name'] or 'لا يوجد'}</p>
+        <br>
+        <div style="border:1px dashed black; padding:15px;">
+            <strong>إقــرار:</strong><br>
+            أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه كما أني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب لتمديد الإجازة والموافقة عليها من قبل رئيسي...
+        </div>
+        <br><br>
+        <p style="text-align:center;"><strong>تمت الموافقة الإلكترونية ✅</strong></p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# --- 6. التوجيه ---
+if st.session_state['user']:
+    with st.sidebar:
+        st.header(st.session_state['user']['name'])
+        if st.button("🏠 الرئيسية"): st.session_state['page']='dashboard'; st.rerun()
+        if st.session_state['user']['role'] in ['Manager', 'HR']:
+            if st.button("✅ الموافقات"): st.session_state['page']='approvals'; st.rerun()
+        if st.button("🚪 خروج"): st.session_state.clear(); st.rerun()
+
+if st.session_state['page'] == 'login': login_page()
+elif st.session_state['page'] == 'dashboard': dashboard_page()
+elif st.session_state['page'] == 'form': form_page()
+elif st.session_state['page'] == 'approvals': approvals_page()
+elif st.session_state['page'] == 'my_requests': my_requests_page()
