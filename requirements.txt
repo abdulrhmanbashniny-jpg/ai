@@ -4,5 +4,5 @@ openpyxl
 pandas
 gspread
 oauth2client
-supabase
-reportlab 
+supabase 
+xhtml2pdf
