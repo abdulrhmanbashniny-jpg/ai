@@ -4,9 +4,11 @@ import pandas as pd
 from datetime import datetime
 import time
 import urllib.parse
+from io import BytesIO
+from xhtml2pdf import pisa
 
 # --- 1. إعدادات الصفحة ---
-st.set_page_config(page_title="HR Enterprise System", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="نظام الموارد البشرية", layout="wide", page_icon="🏢")
 
 st.markdown("""
 <style>
@@ -18,16 +20,26 @@ st.markdown("""
     .service-card:hover { transform: translateY(-5px); border-color: #2ecc71; }
     h1, h2, h3 { font-family: 'Segoe UI', sans-serif; color: #2c3e50; }
     .stButton>button { width: 100%; border-radius: 8px; height: 45px; font-weight: 600; }
-    .step { display: inline-block; padding: 5px 15px; border-radius: 20px; font-size: 0.9em; margin: 5px; }
-    .step-done { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-    .step-wait { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
-    .step-now { background: #cce5ff; color: #004085; border: 1px solid #b8daff; font-weight:bold; }
     
     /* تنسيق الطباعة */
     @media print {
         body * { visibility: hidden; }
         #printableArea, #printableArea * { visibility: visible; }
         #printableArea { position: absolute; left: 0; top: 0; width: 100%; }
+    }
+    
+    /* تنسيق الإقرار */
+    .declaration-text {
+        background-color: #fff3cd; 
+        border: 1px solid #ffeeba; 
+        padding: 15px; 
+        border-radius: 5px; 
+        color: #856404; 
+        font-size: 0.95em; 
+        line-height: 1.6; 
+        margin-bottom: 15px;
+        white-space: pre-wrap; /* يمنع قص النص */
+        text-align: justify;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -92,68 +104,41 @@ def update_status_db(req_id, field, status, note, user_name):
     supabase.table("requests").update(data).eq("id", req_id).execute()
 
 def show_print_view(r):
-    """عرض صفحة HTML نظيفة للطباعة"""
     st.markdown(f"""
-    <div id="printableArea" style="border:2px solid #333; padding:40px; background:white; color:black; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; direction:rtl; text-align:right; max-width:800px; margin:auto;">
+    <div id="printableArea" style="border:2px solid #333; padding:40px; background:white; color:black; font-family:Arial; direction:rtl; text-align:right; max-width:800px; margin:auto;">
         <div style="text-align:center; border-bottom:2px solid #333; padding-bottom:20px; margin-bottom:30px;">
             <h2>نموذج إجازة / مغادرة</h2>
-            <h3>Leave Request Form</h3>
         </div>
-        
         <table style="width:100%; border-collapse:collapse; margin-bottom:30px;" border="1" cellpadding="10">
             <tr>
-                <td style="background:#f9f9f9; font-weight:bold; width:20%;">الاسم</td>
-                <td style="width:30%;">{r['emp_name']}</td>
-                <td style="background:#f9f9f9; font-weight:bold; width:20%;">الرقم الوظيفي</td>
-                <td style="width:30%;">{r['emp_id']}</td>
+                <td style="background:#f9f9f9; font-weight:bold;">الاسم</td><td>{r['emp_name']}</td>
+                <td style="background:#f9f9f9; font-weight:bold;">الرقم</td><td>{r['emp_id']}</td>
             </tr>
             <tr>
-                <td style="background:#f9f9f9; font-weight:bold;">القسم</td>
-                <td>{r['dept']}</td>
-                <td style="background:#f9f9f9; font-weight:bold;">المسمى</td>
-                <td>{r.get('job_title','-')}</td>
+                <td style="background:#f9f9f9; font-weight:bold;">القسم</td><td>{r['dept']}</td>
+                <td style="background:#f9f9f9; font-weight:bold;">المسمى</td><td>{r.get('job_title','-')}</td>
             </tr>
         </table>
-        
         <div style="border:1px solid #ddd; padding:20px; border-radius:8px; margin-bottom:30px;">
-            <p><strong>نوع الطلب:</strong> {r.get('sub_type')}</p>
-            <p><strong>الفترة:</strong> {r.get('days')} أيام (من {r.get('start_date')} إلى {r.get('end_date')})</p>
+            <p><strong>النوع:</strong> {r.get('sub_type')}</p>
+            <p><strong>المدة:</strong> {r.get('days')} أيام (من {r.get('start_date')} إلى {r.get('end_date')})</p>
             <p><strong>البديل:</strong> {r.get('substitute_name', 'لا يوجد')}</p>
         </div>
-
-        <div style="background:#fffbf2; border:1px solid #f0e6ce; padding:20px; margin-bottom:40px; text-align:justify; font-size:14px;">
-            <strong>إقرار وتعهد:</strong><br>
-            أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه، كما أنني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب رسمي لتمديد الإجازة والموافقة عليها خطياً من قبل رئيسي المباشر. 
-            كما أعتبر نفسي منذراً بالفصل النهائي عند تجاوز مدة الغياب حسب المدة المحددة في نظام العمل والعمال.
+        <div style="background:#fffbf2; border:1px solid #f0e6ce; padding:20px; margin-bottom:40px; text-align:justify;">
+            <strong>إقرار:</strong><br>
+            أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه كما أني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب لتمديد الإجازة والموافقة عليها من قبل رئيسي كما أعتبر نفسي منذراً بالفصل عند تجاوز مدة الغياب حسب المدة المحددة من نظام العمل والعمال وذلك دون الحاجه لإنذاري على عنواني في بلدي وأنني سأقوم بإجازتي في التاريخ المبين أعلاه وبذلك سألتزم وعلى ذلك أوقع.
         </div>
-        
         <table style="width:100%; text-align:center; margin-top:50px;">
             <tr>
-                <td style="height:100px; vertical-align:bottom;">
-                    <strong>توقيع الموظف</strong><br>
-                    {r['emp_name']}<br>
-                    <span style="font-size:12px; color:#666;">{r['created_at'][:10]}</span>
-                </td>
-                <td style="vertical-align:bottom;">
-                    <strong>المدير المباشر</strong><br>
-                    ✅ معتمد<br>
-                    <span style="font-size:12px; color:#666;">{r.get('manager_note','')}</span>
-                </td>
-                <td style="vertical-align:bottom;">
-                    <strong>الموارد البشرية</strong><br>
-                    ✅ معتمد<br>
-                    <span style="font-size:12px; color:#666;">{r.get('hr_note','')}</span>
-                </td>
+                <td><strong>الموظف</strong><br>{r['emp_name']}</td>
+                <td><strong>المدير المباشر</strong><br>✅ {r.get('manager_note','موافق')}</td>
+                <td><strong>الموارد البشرية</strong><br>✅ {r.get('hr_note','موافق')}</td>
             </tr>
         </table>
-        
-        <div style="text-align:center; margin-top:50px; font-size:12px; color:#999;">
-            تم إصدار هذا المستند إلكترونياً من نظام الموارد البشرية
-        </div>
     </div>
     """, unsafe_allow_html=True)
-    st.info("💡 اضغط Ctrl+P (أو Command+P) لطباعة هذه الصفحة أو حفظها كـ PDF")
-    if st.button("إغلاق العرض"): st.rerun()
+    st.info("اضغط Ctrl+P للطباعة")
+    if st.button("إغلاق"): st.rerun()
 
 # --- 4. الصفحات ---
 def login_page():
@@ -174,19 +159,32 @@ def dashboard_page():
     tasks, _ = get_requests_for_role(u['role'], u['emp_id'], u['dept'])
     if tasks: st.warning(f"🔔 لديك ({len(tasks)}) مهام.")
     st.write("---")
+    
+    # تمت استعادة جميع الأزرار هنا
     c1,c2,c3=st.columns(3)
     with c1:
         st.markdown('<div class="service-card"><h3>🌴 الإجازات</h3></div>', unsafe_allow_html=True)
-        if st.button("تقديم طلب"): nav("leave")
+        if st.button("تقديم إجازة"): nav("leave")
+        st.markdown('<div class="service-card"><h3>🛒 المشتريات</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب شراء"): nav("purchase")
+    with c2:
+        st.markdown('<div class="service-card"><h3>💰 السلف</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب سلفة"): nav("loan")
+        st.markdown('<div class="service-card"><h3>✈️ الانتداب</h3></div>', unsafe_allow_html=True)
+        if st.button("طلب انتداب"): nav("travel")
     with c3:
-        st.markdown('<div class="service-card"><h3>📂 ملفي</h3></div>', unsafe_allow_html=True)
+        st.markdown('<div class="service-card"><h3>⏱️ الاستئذان</h3></div>', unsafe_allow_html=True)
+        if st.button("تسجيل استئذان"): nav("perm")
+        st.markdown('<div class="service-card" style="border-color:#f39c12;"><h3>📂 ملفي</h3></div>', unsafe_allow_html=True)
         if st.button("سجل المعاملات"): st.session_state['page']='my_requests'; st.rerun()
 
 def nav(s): st.session_state['service']=s; st.session_state['page']='form'; st.rerun()
 
 def form_page():
     u = st.session_state['user']; svc = st.session_state['service']
-    if st.button("🔙"): st.session_state['page']='dashboard'; st.rerun()
+    if st.button("🔙 عودة"): st.session_state['page']='dashboard'; st.rerun()
+    st.write("---")
+    
     if svc == 'leave':
         st.header("🌴 طلب إجازة")
         c1,c2=st.columns(2); d1=c1.date_input("من"); d2=c2.date_input("إلى")
@@ -194,19 +192,44 @@ def form_page():
         if days>0: st.info(f"المدة: {days} يوم")
         
         l_type = st.selectbox("النوع", ["سنوية", "مرضية", "بدون راتب"])
-        sub_id = st.text_input("رقم البديل")
+        sub_id = st.text_input("رقم البديل (اختياري)")
         sub_name = None
         if sub_id:
             s_u = get_user_data(sub_id)
             if s_u: st.success(f"✅ {s_u['name']}"); sub_name=s_u['name']
         
-        st.warning("أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد... (الإقرار الكامل).")
-        if st.checkbox("موافق") and st.button("إرسال"):
-            data = {"emp_id":u['emp_id'], "emp_name":u['name'], "dept":u['dept'], "service_type":"إجازة", 
-                    "sub_type":l_type, "start_date":str(d1), "end_date":str(d2), "days":days,
-                    "substitute_id":sub_id or None, "substitute_name":sub_name,
-                    "status_substitute":"Pending" if sub_id else "Not Required", "declaration_agreed":True}
-            submit_request_db(data); st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+        # الإقرار الكامل (تم إصلاحه ليظهر كاملاً)
+        st.markdown("""
+        <div class="declaration-text">
+        <strong>(( إقــرار ))</strong><br>
+        أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه كما أني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب لتمديد الإجازة والموافقة عليها من قبل رئيسي كما أعتبر نفسي منذراً بالفصل عند تجاوز مدة الغياب حسب المدة المحددة من نظام العمل والعمال وذلك دون الحاجه لإنذاري على عنواني في بلدي وأنني سأقوم بإجازتي في التاريخ المبين أعلاه وبذلك سألتزم وعلى ذلك أوقع.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        agree = st.checkbox("أوافق وألتزم بما ورد أعلاه")
+        
+        if st.button("إرسال"):
+            if agree and days>0:
+                data = {"emp_id":u['emp_id'], "emp_name":u['name'], "dept":u['dept'], "service_type":"إجازة", 
+                        "sub_type":l_type, "start_date":str(d1), "end_date":str(d2), "days":days,
+                        "substitute_id":sub_id or None, "substitute_name":sub_name,
+                        "status_substitute":"Pending" if sub_id else "Not Required", "declaration_agreed":True}
+                submit_request_db(data); st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+            else: st.error("يجب الموافقة على الإقرار والتأكد من التاريخ")
+
+    # بقية النماذج (تمت إعادتها)
+    elif svc == 'loan':
+        st.header("💰 طلب سلفة"); amt = st.number_input("المبلغ", 500); rsn = st.text_area("السبب")
+        if st.button("إرسال"): submit_request_db({"emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'], "service_type": "سلفة", "amount": amt, "details": rsn}); st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+    elif svc == 'purchase':
+        st.header("🛒 طلب شراء"); item = st.text_input("الصنف"); rsn = st.text_area("السبب")
+        if st.button("إرسال"): submit_request_db({"emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'], "service_type": "مشتريات", "details": f"{item} - {rsn}"}); st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+    elif svc == 'travel':
+        st.header("✈️ انتداب"); dst = st.text_input("الوجهة"); rsn = st.text_area("السبب")
+        if st.button("إرسال"): submit_request_db({"emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'], "service_type": "انتداب", "details": f"إلى {dst} - {rsn}"}); st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
+    elif svc == 'perm':
+        st.header("⏱️ استئذان"); d = st.date_input("التاريخ"); tm = st.time_input("الوقت")
+        if st.button("إرسال"): submit_request_db({"emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'], "service_type": "استئذان", "start_date": str(d), "details": str(tm)}); st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
 
 def approvals_page():
     u = st.session_state['user']; st.title("✅ المهام")
@@ -214,8 +237,9 @@ def approvals_page():
     
     if tasks:
         for r in tasks:
-            with st.expander(f"{r['emp_name']} - {r['sub_type']}", expanded=True):
-                st.write(f"التفاصيل: {r.get('days')} يوم"); note = st.text_input("ملاحظة", key=f"n{r['id']}")
+            with st.expander(f"{r['emp_name']} - {r['sub_type'] or r['service_type']}", expanded=True):
+                st.write(f"التفاصيل: {r.get('days',0)} يوم - {r.get('details','')}")
+                note = st.text_input("ملاحظة", key=f"n{r['id']}")
                 c1,c2=st.columns(2)
                 if c1.button("موافقة", key=f"ok{r['id']}"):
                     f = "status_substitute" if r['task_type']=='Substitute' else "status_manager" if r['task_type']=='Manager' else "status_hr"
@@ -229,7 +253,7 @@ def approvals_page():
         st.divider(); st.subheader("سجل الموافقات (لإرسال واتساب)")
         for h in history:
             phone = h.get('phone','').replace('0','966',1)
-            link = f"https://wa.me/{phone}?text={urllib.parse.quote(f'تم اعتماد طلبك ({h['sub_type']})')}"
+            link = f"https://wa.me/{phone}?text={urllib.parse.quote(f'تم اعتماد طلبك ({h['service_type']})')}"
             st.markdown(f"<a href='{link}' target='_blank'>📲 واتساب لـ {h['emp_name']}</a>", unsafe_allow_html=True)
 
 def my_requests_page():
@@ -239,7 +263,7 @@ def my_requests_page():
     for r in reqs:
         with st.container():
             st.write(f"**{r['service_type']}** - {r.get('final_status','تحت الإجراء')}")
-            if r.get('final_status')=='Approved':
+            if r.get('final_status')=='Approved' and r['service_type']=='إجازة':
                 if st.button("🖨️ عرض للطباعة", key=f"pr{r['id']}"):
                     show_print_view(r)
             st.divider()
