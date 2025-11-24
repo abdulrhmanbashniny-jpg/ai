@@ -76,27 +76,30 @@ def reshape_text(text: str) -> str:
     except: return str(text)
 
 # ==============================
-# 4) دوال إدارة البيانات
+# 4) دوال إدارة البيانات (كاملة)
 # ==============================
 def get_user_data(emp_id: str):
     if not supabase: return None
     res = supabase.table("employees").select("*").eq("emp_id", emp_id).execute()
     return res.data[0] if res.data else None
 
+def calculate_annual_leave_days(hire_date_str):
+    """تحديد هل الاستحقاق 21 أو 30 يوماً حسب سنوات الخدمة."""
+    if not hire_date_str: return 21
+    try:
+        hire_date = datetime.strptime(str(hire_date_str)[:10], "%Y-%m-%d")
+        years = (datetime.now() - hire_date).days / 365.25
+        return 30 if years >= 5 else 21
+    except: return 21
+
 def get_leave_balance(emp: dict):
     """قراءة الرصيد الحالي وتاريخ آخر احتساب"""
     lb = emp.get("leave_balances") or {}
     
-    # استرجاع القيم أو الحساب التلقائي إذا كانت فارغة
     annual_balance = lb.get("annual_balance")
     if annual_balance is None:
-        # حساب مبدئي (21 أو 30)
-        hire = emp.get("hire_date")
-        if hire:
-            years = (datetime.now() - datetime.fromisoformat(str(hire))).days / 365.25
-            annual_balance = 30 if years >= 5 else 21
-        else:
-            annual_balance = 21
+        # إذا لم يكن هناك رصيد مسجل، احسبه افتراضياً
+        annual_balance = calculate_annual_leave_days(emp.get("hire_date"))
 
     last_settlement = lb.get("last_settlement_date") or emp.get("hire_date") or datetime.today().date().isoformat()
     
@@ -115,6 +118,7 @@ def set_leave_balance(emp_id: str, new_balance: float, new_settlement_date):
 
 def calculate_leave_allowance(salary: float, requested_days: float) -> float:
     if not salary or salary <= 0: return 0.0
+    # الحساب: (الراتب / 30) * عدد أيام الإجازة
     return round((float(salary) / 30.0) * float(requested_days), 2)
 
 def submit_request_db(data: dict) -> bool:
@@ -239,9 +243,9 @@ def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowan
         c.setFont(font_name, 11)
         draw_rtl_pair("الراتب الإجمالي:", f"{salary} ريال", y, width-2.5*cm, width-9*cm); y -= 0.7*cm
         draw_rtl_pair("الرصيد السنوي:", f"{annual_days} يوم", y, width-2.5*cm, width-9*cm); y -= 0.7*cm
-        draw_rtl_pair("أيام الإجازة:", f"{r.get('days',0)} يوم", y, width-2.5*cm, width-9*cm); y -= 0.7*cm
-        draw_rtl_pair("تاريخ الاحتساب:", str(last_calc_date), y, width-2.5*cm, width-9*cm); y -= 0.7*cm
-        draw_rtl_pair("مبلغ البدل:", f"{allowance} ريال", y, width-2.5*cm, width-9*cm); y -= 1.5*cm
+        draw_rtl_pair("أيام الإجازة المستحقة:", f"{r.get('days',0)} يوم", y, width-2.5*cm, width-9*cm); y -= 0.7*cm
+        draw_rtl_pair("تاريخ آخر احتساب:", str(last_calc_date), y, width-2.5*cm, width-9*cm); y -= 0.7*cm
+        draw_rtl_pair("مبلغ بدل الإجازة:", f"{allowance} ريال", y, width-2.5*cm, width-9*cm); y -= 1.5*cm
         
         x_acc, x_fin, x_gm = width-4*cm, width/2, 4*cm
         draw_rtl("المحاسب", x_acc, y); draw_rtl("المدير المالي", x_fin, y); draw_rtl("المدير العام", x_gm, y)
@@ -354,6 +358,7 @@ def calc_allowance_page():
     
     c1,c2 = st.columns(2)
     salary = c1.number_input("الراتب", value=float(emp.get('salary',0)))
+    # تم استدعاء الدالة بشكل صحيح هنا
     annual = c2.number_input("الرصيد السنوي", value=float(calculate_annual_leave_days(emp.get('hire_date'))))
     
     st.write("### فترة الاحتساب")
