@@ -4,8 +4,6 @@ import pandas as pd
 from datetime import datetime
 import time
 import urllib.parse
-from io import BytesIO
-from xhtml2pdf import pisa
 
 # --- 1. إعدادات الصفحة ---
 st.set_page_config(page_title="نظام الموارد البشرية", layout="wide", page_icon="🏢")
@@ -28,18 +26,18 @@ st.markdown("""
         #printableArea { position: absolute; left: 0; top: 0; width: 100%; }
     }
     
-    /* تنسيق الإقرار */
-    .declaration-text {
-        background-color: #fff3cd; 
-        border: 1px solid #ffeeba; 
-        padding: 15px; 
-        border-radius: 5px; 
-        color: #856404; 
-        font-size: 0.95em; 
-        line-height: 1.6; 
-        margin-bottom: 15px;
-        white-space: pre-wrap; /* يمنع قص النص */
+    /* تنسيق الإقرار ليظهر كاملاً */
+    .declaration-box {
+        background-color: #fff3cd;
+        border: 1px solid #ffeeba;
+        padding: 15px;
+        border-radius: 5px;
+        color: #856404;
+        font-size: 0.95em;
+        line-height: 1.8;
         text-align: justify;
+        white-space: pre-wrap; /* يمنع قص النص */
+        margin: 15px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -124,7 +122,7 @@ def show_print_view(r):
             <p><strong>المدة:</strong> {r.get('days')} أيام (من {r.get('start_date')} إلى {r.get('end_date')})</p>
             <p><strong>البديل:</strong> {r.get('substitute_name', 'لا يوجد')}</p>
         </div>
-        <div style="background:#fffbf2; border:1px solid #f0e6ce; padding:20px; margin-bottom:40px; text-align:justify;">
+        <div style="background:#fffbf2; border:1px solid #f0e6ce; padding:20px; margin-bottom:40px; text-align:justify; line-height:1.8;">
             <strong>إقرار:</strong><br>
             أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه كما أني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب لتمديد الإجازة والموافقة عليها من قبل رئيسي كما أعتبر نفسي منذراً بالفصل عند تجاوز مدة الغياب حسب المدة المحددة من نظام العمل والعمال وذلك دون الحاجه لإنذاري على عنواني في بلدي وأنني سأقوم بإجازتي في التاريخ المبين أعلاه وبذلك سألتزم وعلى ذلك أوقع.
         </div>
@@ -137,7 +135,7 @@ def show_print_view(r):
         </table>
     </div>
     """, unsafe_allow_html=True)
-    st.info("اضغط Ctrl+P للطباعة")
+    st.info("اضغط Ctrl+P (أو Command+P) للطباعة")
     if st.button("إغلاق"): st.rerun()
 
 # --- 4. الصفحات ---
@@ -160,7 +158,7 @@ def dashboard_page():
     if tasks: st.warning(f"🔔 لديك ({len(tasks)}) مهام.")
     st.write("---")
     
-    # تمت استعادة جميع الأزرار هنا
+    # جميع الأزرار عادت هنا
     c1,c2,c3=st.columns(3)
     with c1:
         st.markdown('<div class="service-card"><h3>🌴 الإجازات</h3></div>', unsafe_allow_html=True)
@@ -198,15 +196,15 @@ def form_page():
             s_u = get_user_data(sub_id)
             if s_u: st.success(f"✅ {s_u['name']}"); sub_name=s_u['name']
         
-        # الإقرار الكامل (تم إصلاحه ليظهر كاملاً)
+        # الإقرار الكامل
         st.markdown("""
-        <div class="declaration-text">
-        <strong>(( إقــرار ))</strong><br>
+        <div class="declaration-box">
+        <strong>(( إقــرار وتعهــد ))</strong><br>
         أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه كما أني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب لتمديد الإجازة والموافقة عليها من قبل رئيسي كما أعتبر نفسي منذراً بالفصل عند تجاوز مدة الغياب حسب المدة المحددة من نظام العمل والعمال وذلك دون الحاجه لإنذاري على عنواني في بلدي وأنني سأقوم بإجازتي في التاريخ المبين أعلاه وبذلك سألتزم وعلى ذلك أوقع.
         </div>
         """, unsafe_allow_html=True)
         
-        agree = st.checkbox("أوافق وألتزم بما ورد أعلاه")
+        agree = st.checkbox("أوافق وألتزم بما ورد في الإقرار أعلاه")
         
         if st.button("إرسال"):
             if agree and days>0:
@@ -215,9 +213,8 @@ def form_page():
                         "substitute_id":sub_id or None, "substitute_name":sub_name,
                         "status_substitute":"Pending" if sub_id else "Not Required", "declaration_agreed":True}
                 submit_request_db(data); st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
-            else: st.error("يجب الموافقة على الإقرار والتأكد من التاريخ")
+            else: st.error("يجب الموافقة على الإقرار")
 
-    # بقية النماذج (تمت إعادتها)
     elif svc == 'loan':
         st.header("💰 طلب سلفة"); amt = st.number_input("المبلغ", 500); rsn = st.text_area("السبب")
         if st.button("إرسال"): submit_request_db({"emp_id": u['emp_id'], "emp_name": u['name'], "dept": u['dept'], "service_type": "سلفة", "amount": amt, "details": rsn}); st.success("تم!"); time.sleep(1); st.session_state['page']='dashboard'; st.rerun()
