@@ -63,7 +63,7 @@ supabase = init_supabase()
 # ==============================
 # 3) إعداد الخط العربي لـ PDF
 # ==============================
-font_path = "arial.ttf"  # تأكد من رفع هذا الملف في نفس مجلد المشروع (GitHub)
+font_path = "arial.ttf"
 
 try:
     pdfmetrics.registerFont(TTFont('Arabic', font_path))
@@ -128,16 +128,14 @@ def get_requests_for_role(role: str, emp_id: str, dept: str):
     history = []
 
     # مهام البديل
-    sub = supabase.table("requests").select("*") \
-        .eq("substitute_id", emp_id).eq("status_substitute", "Pending").execute().data
+    sub = supabase.table("requests").select("*").eq("substitute_id", emp_id).eq("status_substitute", "Pending").execute().data
     for r in sub or []:
         r["task_type"] = "Substitute"
         tasks.append(r)
 
     # مهام المدير
     if role == "Manager":
-        mgr = supabase.table("requests").select("*") \
-            .eq("dept", dept).eq("status_manager", "Pending").execute().data
+        mgr = supabase.table("requests").select("*").eq("dept", dept).eq("status_manager", "Pending").execute().data
         for r in mgr or []:
             if r.get("status_substitute") in ["Approved", "Not Required"]:
                 r["task_type"] = "Manager"
@@ -145,15 +143,11 @@ def get_requests_for_role(role: str, emp_id: str, dept: str):
 
     # مهام HR
     if role == "HR":
-        hr = supabase.table("requests").select("*") \
-            .eq("status_manager", "Approved").eq("status_hr", "Pending").execute().data
+        hr = supabase.table("requests").select("*").eq("status_manager", "Approved").eq("status_hr", "Pending").execute().data
         for r in hr or []:
             r["task_type"] = "HR"
             tasks.append(r)
-
-        # سجل الطلبات المعتمدة
-        history = supabase.table("requests").select("*") \
-            .eq("final_status", "Approved").order("hr_action_at", desc=True).limit(50).execute().data
+        history = supabase.table("requests").select("*").eq("final_status", "Approved").order("hr_action_at", desc=True).limit(50).execute().data
 
     return tasks, history
 
@@ -187,16 +181,8 @@ def update_status_db(req_id: int, field: str, status: str, note: str, user_name:
 # ==============================
 # 5) دالة إنشاء PDF منسق
 # ==============================
-def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowance=0.0,
-                 include_financials=False):
-    """
-    إنشاء PDF عربي منسق بمقاس A4:
-    - عنوان: نموذج طلب إجازة
-    - جدول بيانات الموظف
-    - إقرار متعدد الأسطر
-    - توقيعات الموظف/المدير/HR
-    - (اختياري) قسم احتساب مستحقات الإجازة وتوقيعات المالية
-    """
+def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowance=0.0, include_financials=False):
+    """إنشاء PDF عربي منسق بمقاس A4"""
     buffer = BytesIO()
     c = pdf_canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -225,12 +211,12 @@ def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowan
             y -= line_height
         return y
 
-    # --- العنوان ---
+    # العنوان
     c.setFont(font_name, 18)
     c.drawCentredString(width / 2, height - 2 * cm, reshape_text("نموذج طلب إجازة"))
     c.line(2 * cm, height - 2.4 * cm, width - 2 * cm, height - 2.4 * cm)
 
-    # --- إطار بيانات الموظف ---
+    # إطار بيانات الموظف
     box_top = height - 3 * cm
     box_height = 5 * cm
     c.rect(2 * cm, box_top - box_height, width - 4 * cm, box_height)
@@ -238,33 +224,26 @@ def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowan
     y = box_top - 0.8 * cm
     c.setFont(font_name, 11)
 
-    # السطر 1: الاسم + الرقم
     draw_rtl_pair("اسم الموظف:", r["emp_name"], y, width - 2.5 * cm, width - 8.5 * cm)
     draw_rtl_pair("الرقم الوظيفي:", r["emp_id"], y, width - 10.5 * cm, width - 15 * cm)
     y -= 0.9 * cm
 
-    # السطر 2: القسم + المسمى
     draw_rtl_pair("القسم:", r["dept"], y, width - 2.5 * cm, width - 8.5 * cm)
     draw_rtl_pair("المسمى الوظيفي:", r.get("job_title", "-"), y, width - 10.5 * cm, width - 15 * cm)
     y -= 0.9 * cm
 
-    # السطر 3: نوع الإجازة + المدة
     draw_rtl_pair("نوع الإجازة:", r.get("sub_type", "-"), y, width - 2.5 * cm, width - 8.5 * cm)
     draw_rtl_pair("عدد الأيام:", f"{r.get('days', 0)} يوم", y, width - 10.5 * cm, width - 15 * cm)
     y -= 0.9 * cm
 
-    # السطر 4: من / إلى
     draw_rtl_pair("من تاريخ:", r.get("start_date", ""), y, width - 2.5 * cm, width - 8.5 * cm)
     draw_rtl_pair("إلى تاريخ:", r.get("end_date", ""), y, width - 10.5 * cm, width - 15 * cm)
     y -= 0.9 * cm
 
-    # السطر 5: البديل + تاريخ التقديم
-    draw_rtl_pair("الموظف البديل:", r.get("substitute_name", "لا يوجد"), y,
-                  width - 2.5 * cm, width - 8.5 * cm)
-    draw_rtl_pair("تاريخ تقديم المعاملة:", r.get("submission_date", "")[:10], y,
-                  width - 10.5 * cm, width - 15 * cm)
+    draw_rtl_pair("الموظف البديل:", r.get("substitute_name", "لا يوجد"), y, width - 2.5 * cm, width - 8.5 * cm)
+    draw_rtl_pair("تاريخ تقديم المعاملة:", r.get("submission_date", "")[:10], y, width - 10.5 * cm, width - 15 * cm)
 
-    # --- الإقرار ---
+    # الإقرار
     y = box_top - box_height - 1.3 * cm
     c.line(2 * cm, y, width - 2 * cm, y)
     y -= 0.8 * cm
@@ -273,15 +252,10 @@ def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowan
     y -= 0.7 * cm
     c.setFont(font_name, 10)
 
-    declaration_text = (
-        "أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه، "
-        "كما أنني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب رسمي لتمديد الإجازة "
-        "والموافقة عليها من قبل رئيسي المباشر، كما أعتبر نفسي منذراً بالفصل عند تجاوز مدة الغياب "
-        "حسب المدة المحددة في نظام العمل والعمال، وأنني ألتزم بجميع ما ورد أعلاه وعلى ذلك أوقع."
-    )
+    declaration_text = "أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه، كما أنني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب رسمي لتمديد الإجازة والموافقة عليها من قبل رئيسي المباشر، كما أعتبر نفسي منذراً بالفصل عند تجاوز مدة الغياب حسب المدة المحددة في نظام العمل والعمال، وأنني ألتزم بجميع ما ورد أعلاه وعلى ذلك أوقع."
     y = draw_paragraph(declaration_text, width - 2 * cm, y)
 
-    # --- التوقيعات الإدارية ---
+    # التوقيعات الإدارية
     y -= 1.3 * cm
     c.setFont(font_name, 11)
     x_emp = width - 4 * cm
@@ -302,7 +276,7 @@ def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowan
     draw_rtl(r.get("manager_action_at", "")[:10], x_mgr, y)
     draw_rtl(r.get("hr_action_at", "")[:10], x_hr, y)
 
-    # --- قسم الحسابات المالية (اختياري) ---
+    # قسم الحسابات المالية
     if include_financials:
         y -= 2 * cm
         c.line(2 * cm, y, width - 2 * cm, y)
@@ -314,20 +288,15 @@ def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowan
 
         draw_rtl_pair("الراتب الإجمالي:", f"{salary} ريال", y, width - 2.5 * cm, width - 9 * cm)
         y -= 0.7 * cm
-        draw_rtl_pair("عدد أيام الإجازة السنوية:", f"{annual_days} يوم", y,
-                      width - 2.5 * cm, width - 9 * cm)
+        draw_rtl_pair("عدد أيام الإجازة السنوية:", f"{annual_days} يوم", y, width - 2.5 * cm, width - 9 * cm)
         y -= 0.7 * cm
-        draw_rtl_pair("أيام الإجازة المستحقة:", f"{r.get('days', 0)} يوم", y,
-                      width - 2.5 * cm, width - 9 * cm)
+        draw_rtl_pair("أيام الإجازة المستحقة:", f"{r.get('days', 0)} يوم", y, width - 2.5 * cm, width - 9 * cm)
         y -= 0.7 * cm
-        draw_rtl_pair("تاريخ آخر احتساب:", str(last_calc_date), y,
-                      width - 2.5 * cm, width - 9 * cm)
+        draw_rtl_pair("تاريخ آخر احتساب:", str(last_calc_date), y, width - 2.5 * cm, width - 9 * cm)
         y -= 0.7 * cm
-        draw_rtl_pair("مبلغ بدل الإجازة:", f"{allowance} ريال", y,
-                      width - 2.5 * cm, width - 9 * cm)
+        draw_rtl_pair("مبلغ بدل الإجازة:", f"{allowance} ريال", y, width - 2.5 * cm, width - 9 * cm)
         y -= 1.5 * cm
 
-        # تواقيع المالية
         x_acc = width - 4 * cm
         x_fin = width / 2
         x_gm = 4 * cm
@@ -345,7 +314,7 @@ def generate_pdf(r: dict, salary=0.0, annual_days=0, last_calc_date="-", allowan
     return buffer
 
 # ==============================
-# 6) صفحات الواجهة (Streamlit Pages)
+# 6) صفحات الواجهة
 # ==============================
 def login_page():
     st.markdown("<br><h1 style='text-align:center;'>نظام الموارد البشرية</h1>", unsafe_allow_html=True)
@@ -408,7 +377,6 @@ def form_page():
         st.rerun()
     st.write("---")
 
-    # ------------------ طلب إجازة ------------------
     if svc == "leave":
         st.header("🌴 طلب إجازة")
         c1, c2 = st.columns(2)
@@ -429,7 +397,271 @@ def form_page():
             else:
                 st.error("رقم الموظف البديل غير صحيح")
 
-        st.markdown("""
-        <div class="declaration-box">
-        <strong>(( إقرار وتعهــد ))</strong><br>
-        أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه، كما أنني لن أتجاوز
+        declaration_html = """<div class="declaration-box">
+<strong>(( إقرار وتعهــد ))</strong><br>
+أقر أنا الموقع أدناه بأنني سأتمتع بإجازتي في موعدها المحدد أعلاه، كما أنني لن أتجاوز مدة الإجازة المطلوبة إلا عند إرسال خطاب رسمي لتمديد الإجازة والموافقة عليها من قبل رئيسي المباشر، كما أعتبر نفسي منذراً بالفصل عند تجاوز مدة الغياب حسب المدة المحددة في نظام العمل والعمال، وأنني ألتزم بجميع ما ورد أعلاه وعلى ذلك أوقع.
+</div>"""
+        st.markdown(declaration_html, unsafe_allow_html=True)
+        agree = st.checkbox("أوافق على الإقرار")
+
+        if st.button("إرسال الطلب"):
+            if not agree:
+                st.error("يجب الموافقة على الإقرار قبل الإرسال")
+            elif days <= 0:
+                st.error("تاريخ البداية يجب أن يكون قبل تاريخ النهاية")
+            else:
+                data = {
+                    "emp_id": u["emp_id"],
+                    "emp_name": u["name"],
+                    "dept": u["dept"],
+                    "job_title": u.get("job_title", "-"),
+                    "phone": u.get("phone", ""),
+                    "service_type": "إجازة",
+                    "sub_type": l_type,
+                    "start_date": str(d1),
+                    "end_date": str(d2),
+                    "days": days,
+                    "substitute_id": sub_id or None,
+                    "substitute_name": sub_name,
+                    "status_substitute": "Pending" if sub_id else "Not Required",
+                    "declaration_agreed": True,
+                }
+                if submit_request_db(data):
+                    st.success("تم إرسال طلب الإجازة بنجاح")
+                    time.sleep(1)
+                    st.session_state["page"] = "dashboard"
+                    st.rerun()
+
+    elif svc == "loan":
+        st.header("💰 طلب سلفة")
+        amt = st.number_input("المبلغ المطلوب (ريال)", min_value=0.0, step=100.0)
+        reason = st.text_area("سبب طلب السلفة")
+        if st.button("إرسال"):
+            data = {
+                "emp_id": u["emp_id"],
+                "emp_name": u["name"],
+                "dept": u["dept"],
+                "phone": u.get("phone", ""),
+                "service_type": "سلفة",
+                "amount": amt,
+                "details": reason,
+            }
+            if submit_request_db(data):
+                st.success("تم إرسال طلب السلفة")
+                time.sleep(1)
+                st.session_state["page"] = "dashboard"
+                st.rerun()
+
+    elif svc == "purchase":
+        st.header("🛒 طلب شراء")
+        item = st.text_input("الصنف")
+        reason = st.text_area("السبب")
+        if st.button("إرسال"):
+            data = {
+                "emp_id": u["emp_id"],
+                "emp_name": u["name"],
+                "dept": u["dept"],
+                "phone": u.get("phone", ""),
+                "service_type": "مشتريات",
+                "details": f"{item} - {reason}",
+            }
+            if submit_request_db(data):
+                st.success("تم إرسال طلب الشراء")
+                time.sleep(1)
+                st.session_state["page"] = "dashboard"
+                st.rerun()
+
+    elif svc == "travel":
+        st.header("✈️ طلب انتداب")
+        dst = st.text_input("الوجهة")
+        reason = st.text_area("الهدف من الانتداب")
+        if st.button("إرسال"):
+            data = {
+                "emp_id": u["emp_id"],
+                "emp_name": u["name"],
+                "dept": u["dept"],
+                "phone": u.get("phone", ""),
+                "service_type": "انتداب",
+                "details": f"{dst} - {reason}",
+            }
+            if submit_request_db(data):
+                st.success("تم إرسال طلب الانتداب")
+                time.sleep(1)
+                st.session_state["page"] = "dashboard"
+                st.rerun()
+
+    elif svc == "perm":
+        st.header("⏱️ طلب استئذان")
+        d = st.date_input("التاريخ")
+        t = st.time_input("الوقت")
+        reason = st.text_area("سبب الاستئذان")
+        if st.button("إرسال"):
+            data = {
+                "emp_id": u["emp_id"],
+                "emp_name": u["name"],
+                "dept": u["dept"],
+                "phone": u.get("phone", ""),
+                "service_type": "استئذان",
+                "start_date": str(d),
+                "details": f"{t} - {reason}",
+            }
+            if submit_request_db(data):
+                st.success("تم إرسال طلب الاستئذان")
+                time.sleep(1)
+                st.session_state["page"] = "dashboard"
+                st.rerun()
+
+def approvals_page():
+    u = st.session_state["user"]
+    st.title("✅ المهام والموافقات")
+    tasks, history = get_requests_for_role(u["role"], u["emp_id"], u["dept"])
+
+    if tasks:
+        st.subheader("📌 طلبات تحتاج إلى إجراء")
+        for r in tasks:
+            task_type = r.get("task_type", "Manager")
+            label = "موافقة بديل" if task_type == "Substitute" else "موافقة مدير" if task_type == "Manager" else "موافقة HR"
+            with st.expander(f"[{label}] {r['emp_name']} - {r['service_type']}", expanded=True):
+                st.write(f"النوع: {r.get('sub_type','-')}")
+                st.write(f"الفترة: {r.get('start_date')} ➜ {r.get('end_date')} ({r.get('days','-')} يوم)")
+                st.write(f"رقم الجوال: {r.get('phone','-')}")
+                note = st.text_input("ملاحظات", key=f"note_{r['id']}")
+                c1, c2 = st.columns(2)
+                if c1.button("✅ موافقة", key=f"ok_{r['id']}"):
+                    field = "status_substitute" if task_type == "Substitute" else "status_manager" if task_type == "Manager" else "status_hr"
+                    update_status_db(r["id"], field, "Approved", note, u["name"])
+                    st.success("تم الاعتماد")
+                    time.sleep(1)
+                    st.rerun()
+                if c2.button("❌ رفض", key=f"no_{r['id']}"):
+                    field = "status_substitute" if task_type == "Substitute" else "status_manager" if task_type == "Manager" else "status_hr"
+                    update_status_db(r["id"], field, "Rejected", note, u["name"])
+                    st.rerun()
+    else:
+        st.info("لا توجد مهام حالياً")
+
+    if u["role"] == "HR" and history:
+        st.divider()
+        st.subheader("📜 سجل الموافقات السابقة (HR)")
+        for h in history:
+            with st.expander(f"✅ {h['emp_name']} - {h['service_type']} ({h.get('hr_action_at','')[:10]})"):
+                st.write(f"رقم الطلب: {h['id']}")
+                st.write(f"نوع الإجازة: {h.get('sub_type','-')}")
+                st.write(f"الفترة: {h.get('start_date')} ➜ {h.get('end_date')} ({h.get('days','-')} يوم)")
+                st.write(f"رقم الجوال: {h.get('phone','-')}")
+
+                phone = h.get("phone", "").replace("0", "966", 1)
+                final_date = h.get("hr_action_at", datetime.now().isoformat())[:10]
+                msg = f"تم اعتماد طلب الإجازة رقم: {h['id']}\nنوع الإجازة: {h.get('sub_type','-')}\nتاريخ البداية: {h.get('start_date')}\nتاريخ النهاية: {h.get('end_date')}\nتاريخ التعميد الأخير: {final_date}"
+                wa_link = f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
+                st.markdown(f"<a href='{wa_link}' target='_blank'><button style='background:#25D366;color:white;border:none;padding:8px 15px;border-radius:5px;'>📲 إرسال واتساب</button></a>", unsafe_allow_html=True)
+
+                if h["service_type"] == "إجازة":
+                    if st.button("💰 مستحقات الإجازة وطباعة", key=f"calc_{h['id']}"):
+                        st.session_state["calc_request"] = h
+                        st.session_state["page"] = "calc_allowance"
+                        st.rerun()
+
+def calc_allowance_page():
+    user = st.session_state.get("user")
+    if not user or user.get("role") != "HR":
+        st.error("هذه الصفحة مخصصة لقسم الموارد البشرية فقط")
+        return
+
+    r = st.session_state.get("calc_request")
+    if not r:
+        st.warning("لم يتم اختيار طلب. الرجاء العودة لسجل الموافقات واختيار طلب.")
+        return
+
+    st.title(f"💰 مستحقات إجازة: {r['emp_name']} ({r['emp_id']})")
+    if st.button("🔙 عودة إلى المهام"):
+        st.session_state["page"] = "approvals"
+        st.rerun()
+
+    st.write("---")
+
+    emp = get_user_data(r["emp_id"])
+    hire_date = emp.get("hire_date") if emp else None
+    auto_annual_days = calculate_annual_leave_days(hire_date)
+    base_salary = float(emp.get("salary", 0) or 0)
+
+    st.info(f"تاريخ المباشرة: {hire_date} | الاستحقاق السنوي (محسوب): {auto_annual_days} يوم")
+
+    col1, col2 = st.columns(2)
+    salary = col1.number_input("الراتب الإجمالي (ريال)", value=base_salary, step=100.0, format="%.2f")
+    annual_days = col2.number_input("عدد أيام الإجازة السنوية", value=float(auto_annual_days), step=1.0, format="%.0f", help="حسب النظام (21 أو 30) ويمكن تعديله عند الحاجة")
+
+    requested_days = st.number_input("أيام الإجازة المستحقة (من الطلب)", value=float(r.get("days", 0)), step=1.0, format="%.0f")
+    last_calc_date = st.date_input("تاريخ آخر احتساب", value=datetime.today())
+
+    allowance = calculate_leave_allowance(salary, requested_days)
+
+    st.success(f"مبلغ بدل الإجازة المحسوب: **{allowance:,.2f} ريال**")
+
+    st.write("---")
+
+    if st.button("📥 تحميل تقرير بدل الإجازة (PDF)", type="primary"):
+        pdf_data = generate_pdf(r, salary=salary, annual_days=int(annual_days), last_calc_date=last_calc_date, allowance=allowance, include_financials=True)
+        st.download_button(label="📥 اضغط هنا لتحميل الملف", data=pdf_data, file_name=f"Leave_Allowance_{r['id']}.pdf", mime="application/pdf")
+
+def my_requests_page():
+    u = st.session_state["user"]
+    st.title("📂 سجل طلباتي")
+    if st.button("🔙 العودة للرئيسية"):
+        st.session_state["page"] = "dashboard"
+        st.rerun()
+
+    if not supabase:
+        st.error("لا يمكن الاتصال بقاعدة البيانات حالياً")
+        return
+
+    reqs = supabase.table("requests").select("*").eq("emp_id", u["emp_id"]).order("created_at", desc=True).execute().data
+
+    if not reqs:
+        st.info("لا توجد طلبات حتى الآن")
+        return
+
+    for r in reqs:
+        with st.container():
+            st.write(f"**{r['service_type']}** ({r.get('sub_type','-')}) | الحالة: {r.get('final_status','تحت الإجراء')}")
+            st.caption(f"تاريخ التقديم: {r.get('submission_date','')[:10]}")
+
+            if r.get("final_status") == "Approved" and r["service_type"] == "إجازة":
+                pdf = generate_pdf(r, include_financials=False)
+                st.download_button("📥 تحميل نموذج طلب الإجازة (PDF)", pdf, file_name=f"Leave_Request_{r['id']}.pdf", mime="application/pdf", key=f"pdf_{r['id']}")
+            st.divider()
+
+# ==============================
+# 7) توجيه الصفحات
+# ==============================
+if "user" not in st.session_state:
+    st.session_state["user"] = None
+if "page" not in st.session_state:
+    st.session_state["page"] = "login"
+
+if st.session_state["user"]:
+    with st.sidebar:
+        st.header(st.session_state["user"]["name"])
+        st.caption(f"الدور: {st.session_state['user'].get('role','-')}")
+        if st.button("🏠 الرئيسية"):
+            st.session_state["page"] = "dashboard"
+            st.rerun()
+        if st.button("✅ المهام والموافقات"):
+            st.session_state["page"] = "approvals"
+            st.rerun()
+        if st.button("🚪 تسجيل خروج"):
+            st.session_state.clear()
+            st.rerun()
+
+if st.session_state["page"] == "login":
+    login_page()
+elif st.session_state["page"] == "dashboard":
+    dashboard_page()
+elif st.session_state["page"] == "form":
+    form_page()
+elif st.session_state["page"] == "approvals":
+    approvals_page()
+elif st.session_state["page"] == "my_requests":
+    my_requests_page()
+elif st.session_state["page"] == "calc_allowance":
+    calc_allowance_page()
